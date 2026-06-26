@@ -1,8 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
-import 'package:dart_rss/dart_rss.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -40,9 +40,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   
   // --- Settings Intent Parser ---
   bool _isListening = false;
-  String _recognizedText = "Press me to start";
+  String _recognizedText = 'waiting for the command';
 
-  String _fetchedText = "Loading";
+
 
   // --- Settings TTS ---
   String _selectedLanguage = "en-UK";
@@ -51,9 +51,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String _currentChannel = "General";
   String _compressionLevel = "Normal";
   bool _isPlaying = false; 
+  String _fetchedText = "Loading";
+  int _currentWordOffset = 0;
+
   Map<String, String> _customRssUrls = {
     "General": "http://feeds.bbci.co.uk/news/rss.xml",
-    "Sport ⚽": "https://tsn.ua/rss/sport.rss",
     "Tecnologies 💻": "https://tsn.ua/rss/science.rss",
     "Politics 🏛️": "https://tsn.ua/rss/politics.rss",
   };
@@ -73,6 +75,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
  void _initTts() async{
   _flutterTts = FlutterTts();
   _updateTtsSettings();
+
+  _flutterTts.setProgressHandler((String text, int startOffset, int endOffset, String word){
+    _currentWordOffset = startOffset;
+  });
+
+  _flutterTts.setCompletionHandler((){
+    setState(() {
+      _isPlaying = false;
+      _currentWordOffset = 0;
+    });
+  });
  }
 
  void _updateTtsSettings() async {
@@ -99,6 +112,11 @@ Future<void> _loadCustomSources() async {
           _currentChannel = _customRssUrls.keys.first;
         }
       });
+      } else {
+      await prefs.setStringList('channels_list', _customRssUrls.keys.toList());
+      for (var entry in _customRssUrls.entries) {
+        await prefs.setString('rss_${entry.key}', entry.value);
+      }
     }
     _loadLiveNews();
   }
@@ -122,33 +140,34 @@ Future<void> _loadCustomSources() async {
   }
 
   Future<void> _loadLiveNews() async {
-    setState(() {
-      _fetchedText = "Loading new news from sources...";
-    });
+    _currentWordOffset = 0;
 
+    setState(() {
+      _fetchedText = "Loading news from source...";
+    });
     try {
-      final url = _customRssUrls[_currentChannel] ?? _customRssUrls.values.first;
-      final response = await http.get(Uri.parse(url));
+
+    final String channelSource = _customRssUrls[_currentChannel] ?? _currentChannel;
+
+      const String backendUrl = "http://192.168.1.125:8000/api/news"; 
+
+      final response = await http.post(
+        Uri.parse(backendUrl),
+        headers: {"Content-Type": "application/json"},
+        body: '{"channel": "$channelSource", "compression": "$_compressionLevel"}'
+      );
 
       if (response.statusCode == 200) {
-        final feed = RssFeed.parse(response.body);
-        if (feed.items != null && feed.items!.isNotEmpty) {
-          final latest = feed.items!.first;
-          setState(() {
-            if (_compressionLevel == "Compressed(only main thought)") {
-              _fetchedText = latest.title ?? "Header is empty";
-            } else {
-              _fetchedText = "${latest.title}. ${latest.description ?? ''}";
-            }
-          });
-        } else {
-          setState(() => _fetchedText = "There is no new news.");
-        }
+        final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        
+        setState(() {
+          _fetchedText = data["content"] ?? "Text is None";
+        });
       } else {
-        setState(() => _fetchedText = "Server problem RSS.");
+        setState(() => _fetchedText = "Server error: ${response.statusCode}");
       }
     } catch (e) {
-      setState(() => _fetchedText = "Error of loading data.");
+        setState(() => _fetchedText = "Can't connect. Check backend");
     }
 
     if (_isPlaying) {
@@ -159,7 +178,12 @@ Future<void> _loadCustomSources() async {
  void _speak(String text) async {
   if (_isPlaying){
     _updateTtsSettings();
-    await _flutterTts.speak(text);
+
+    String textToSpeak = text;
+    if (_currentWordOffset > 0 && _currentWordOffset < text.length) {
+      textToSpeak = text.substring(_currentWordOffset);
+    }
+    await _flutterTts.speak(textToSpeak);
   } 
  }
 
@@ -283,7 +307,7 @@ void _showAddSourceDialog() {
   Widget build(BuildContext context) {
     final List<String> allowedLanguages = ["uk-UA", "en-US", "en-UK"];
     if (!allowedLanguages.contains(_selectedLanguage)) {
-      _selectedLanguage = "uk-UA";
+      _selectedLanguage = "en-UK";
     }
     return Scaffold(
       appBar: AppBar(
@@ -316,14 +340,12 @@ void _showAddSourceDialog() {
                   GestureDetector(
                     onTap: () {
                       setState(() {
-                        _isPlaying = !_isPlaying; // Перемикаємо стан плеєра
+                        _isPlaying = !_isPlaying; 
                       });
                       
                       if (_isPlaying) {
-                        // Якщо натиснули Play — запускаємо озвучення поточних новин
                         _speak(_fetchedText);
                       } else {
-                        // Якщо натиснули Pause — глушимо TTS голоси
                         _stopSpeaking();
                       }
                     },
