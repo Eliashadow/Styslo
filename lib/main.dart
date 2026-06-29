@@ -49,7 +49,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   double _speechRate = 0.5;           // Rate (0.0 - 1.0)
   double _volume = 1.0;               // Volume (0.0 - 1.0)
   String _currentChannel = "General";
-  String _compressionLevel = "Normal";
+  String _compressionLevel = "Compressed(only main thought)";
   bool _isPlaying = false; 
   String _fetchedText = "Loading";
   int _currentWordOffset = 0;
@@ -62,6 +62,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _categoryController = TextEditingController();
 
   @override
   void initState() {
@@ -122,58 +123,68 @@ Future<void> _loadCustomSources() async {
   }
 
   // --- Saving new source ---
-  Future<void> _addCustomSource(String name, String url) async {
-    if (name.isEmpty || url.isEmpty) return;
+ Future<void> _addCustomSource(String sourceName, String url, String category) async {
+  if (sourceName.isEmpty || url.isEmpty) return;
 
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _customRssUrls[name] = url;
-    });
+  try {
+    const String backendUrl = "http://192.168.1.125:8000/api/sources"; 
+    
+    final response = await http.post(
+      Uri.parse(backendUrl),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "name": sourceName,
+        "url": url,
+        "category": category,
+      }),
+    );
 
-    await prefs.setString('rss_$name', url);
-    await prefs.setStringList('channels_list', _customRssUrls.keys.toList());
-    
-    _nameController.clear();
-    _urlController.clear();
-    
-    _loadLiveNews();
+    if (response.statusCode == 201) {
+      _nameController.clear();
+      _urlController.clear();
+      _loadLiveNews();
+    }
+  } catch (e) {
+    print("Problem: $e");
+  }
+}
+
+ Future<void> _loadLiveNews() async {
+  _currentWordOffset = 0;
+
+  setState(() {
+    _fetchedText = "Loading news from source...";
+  });
+  
+  try {
+    const String backendUrl = "http://192.168.1.125:8000/api/news"; 
+
+
+    final response = await http.post(
+      Uri.parse(backendUrl),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+        "category": _currentChannel, 
+        "compression": _compressionLevel,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+      setState(() {
+        _fetchedText = data["content"] ?? "Text is None";
+      });
+    } else {
+      setState(() => _fetchedText = "Server error: ${response.statusCode}");
+    }
+  } catch (e) {
+      setState(() => _fetchedText = "Can't connect. Check backend");
   }
 
-  Future<void> _loadLiveNews() async {
-    _currentWordOffset = 0;
-
-    setState(() {
-      _fetchedText = "Loading news from source...";
-    });
-    try {
-
-    final String channelSource = _customRssUrls[_currentChannel] ?? _currentChannel;
-
-      const String backendUrl = "http://192.168.1.125:8000/api/news"; 
-
-      final response = await http.post(
-        Uri.parse(backendUrl),
-        headers: {"Content-Type": "application/json"},
-        body: '{"channel": "$channelSource", "compression": "$_compressionLevel"}'
-      );
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
-        
-        setState(() {
-          _fetchedText = data["content"] ?? "Text is None";
-        });
-      } else {
-        setState(() => _fetchedText = "Server error: ${response.statusCode}");
-      }
-    } catch (e) {
-        setState(() => _fetchedText = "Can't connect. Check backend");
-    }
-
-    if (_isPlaying) {
-      _speak(_fetchedText);
-    }
+  if (_isPlaying) {
+    _speak(_fetchedText);
   }
+}
 
  void _speak(String text) async {
   if (_isPlaying){
@@ -293,7 +304,7 @@ void _showAddSourceDialog() {
           ),
           ElevatedButton(
             onPressed: () {
-              _addCustomSource(_nameController.text, _urlController.text);
+              _addCustomSource(_nameController.text, _urlController.text, _categoryController.text);
               Navigator.pop(context);
             },
             child: const Text("Add"),
