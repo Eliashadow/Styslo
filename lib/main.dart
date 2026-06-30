@@ -3,7 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+
+// Переконайся, що ці файли створені поруч
+import 'sources_screen.dart';
+import 'settings_screen.dart';
 
 void main() {
   runApp(const StysloApp());
@@ -12,16 +15,15 @@ void main() {
 class StysloApp extends StatelessWidget {
   const StysloApp({super.key});
 
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Styslo',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-      primaryColor: Colors.blueAccent,
-      scaffoldBackgroundColor: const Color(0xFF121212)
+        scaffoldBackgroundColor: Colors.black,
+        primaryColor: Colors.blueAccent,
       ),
- 
       home: const PlayerScreen(),
     );
   }
@@ -36,187 +38,160 @@ class PlayerScreen extends StatefulWidget {
 
 class _PlayerScreenState extends State<PlayerScreen> {
   late stt.SpeechToText _speech;
-  late FlutterTts _flutterTts; 
-  
-  // --- Settings Intent Parser ---
+  final FlutterTts _flutterTts = FlutterTts();
+
+  // --- Конфігурація мережі ---
+  String _currentChannel = "General"; // Початкове значення за дефолтом
+  List<String> _dynamicCategories = ["General"]; // Масив, куди завантажуємо категорії з БД
+  bool _isCategoriesLoading = true;
+
+  final String _apiBaseUrl = "http://192.168.1.125:8000/api"; // Твій IP бекенду
+
+  // --- Стан голосового керування ---
   bool _isListening = false;
-  String _recognizedText = 'waiting for the command';
+  String _recognizedText = 'чекаю на команду';
 
+  // --- Стан TTS та Плеєра ---
+  String _selectedLanguage = "uk-UA";
+  double _speechRate = 0.5;
+  bool _isPlaying = false;
+  String _fetchedText = 'Waiting';
 
-
-  // --- Settings TTS ---
-  String _selectedLanguage = "en-UK";
-  double _speechRate = 0.5;           // Rate (0.0 - 1.0)
-  double _volume = 1.0;               // Volume (0.0 - 1.0)
-  String _currentChannel = "General";
-  String _compressionLevel = "Compressed(only main thought)";
-  bool _isPlaying = false; 
-  String _fetchedText = "Loading";
   int _currentWordOffset = 0;
 
-  Map<String, String> _customRssUrls = {
-    "General": "http://feeds.bbci.co.uk/news/rss.xml",
-    "Tecnologies 💻": "https://tsn.ua/rss/science.rss",
-    "Politics 🏛️": "https://tsn.ua/rss/politics.rss",
-  };
-
-  final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _urlController = TextEditingController();
-  final TextEditingController _categoryController = TextEditingController();
+  // --- Керування компресією ---
+  String _selectedCompression = "Compressed(only main thought)";
 
   @override
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
     _initTts();
-    _loadCustomSources();
+    _fetchCategories();
   }
 
-
- void _initTts() async{
-  _flutterTts = FlutterTts();
-  _updateTtsSettings();
-
-  _flutterTts.setProgressHandler((String text, int startOffset, int endOffset, String word){
-    _currentWordOffset = startOffset;
-  });
-
-  _flutterTts.setCompletionHandler((){
-    setState(() {
-      _isPlaying = false;
-      _currentWordOffset = 0;
-    });
-  });
- }
-
- void _updateTtsSettings() async {
+  void _initTts() async {
     await _flutterTts.setLanguage(_selectedLanguage);
     await _flutterTts.setSpeechRate(_speechRate);
-    await _flutterTts.setVolume(_volume);
+    await _flutterTts.setVolume(1.0);
+
+    _flutterTts.setProgressHandler((String text, int startOffset, int endOffset, String word) {
+      _currentWordOffset = startOffset;
+    });
+
+    _flutterTts.setStartHandler(() {
+      setState(() => _isPlaying = true);
+    });
+
+    _flutterTts.setCompletionHandler(() {
+      setState(() {
+        _isPlaying = false;
+        _currentWordOffset = 0;
+      });
+    });
+
+    _flutterTts.setErrorHandler((msg) {
+      setState(() => _isPlaying = false);
+      print("Помилка TTS: $msg");
+    });
   }
 
-Future<void> _loadCustomSources() async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<String>? savedChannels = prefs.getStringList('channels_list');
-    
-    if (savedChannels != null && savedChannels.isNotEmpty) {
-      Map<String, String> loadedUrls = {};
-      for (String channel in savedChannels) {
-        String? url = prefs.getString('rss_$channel');
-        if (url != null) {
-          loadedUrls[channel] = url;
+  Future<void> _updateTtsSettings() async {
+    await _flutterTts.setLanguage(_selectedLanguage);
+    await _flutterTts.setSpeechRate(_speechRate);
+  }
+
+  Future<void> _fetchCategories() async {
+    try {
+      final response = await http.get(Uri.parse("$_apiBaseUrl/sources"));
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+
+        // Витягуємо тільки імена категорій
+        List<String> fetchedCats = data.map<String>((item) => item["category_name"] as String).toList();
+
+        if (fetchedCats.isNotEmpty) {
+          setState(() {
+            _dynamicCategories = fetchedCats;
+
+            if (!_dynamicCategories.contains(_currentChannel)) {
+              _currentChannel = _dynamicCategories.first;
+            }
+            _isCategoriesLoading = false;
+          });
         }
       }
-      setState(() {
-        _customRssUrls = loadedUrls;
-        if (!_customRssUrls.containsKey(_currentChannel)) {
-          _currentChannel = _customRssUrls.keys.first;
-        }
-      });
+    } catch (e) {
+      print("Помилка завантаження категорій для плеєра: $e");
+      setState(() => _isCategoriesLoading = false);
+    }
+  }
+
+  Future<void> _loadLiveNews() async {
+    _currentWordOffset = 0;
+
+    setState(() {
+      _fetchedText = "Loading news from source...";
+    });
+
+    try {
+      final String backendUrl = "$_apiBaseUrl/news";
+
+      final response = await http.post(
+        Uri.parse(backendUrl),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "category": _currentChannel,
+          "compression": _selectedCompression, // Виправлено помилку з невідомою змінною
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+        setState(() {
+          _fetchedText = data["content"] ?? "Text is None";
+        });
       } else {
-      await prefs.setStringList('channels_list', _customRssUrls.keys.toList());
-      for (var entry in _customRssUrls.entries) {
-        await prefs.setString('rss_${entry.key}', entry.value);
+        setState(() => _fetchedText = "Server error: ${response.statusCode}");
       }
-    }
-    _loadLiveNews();
-  }
-
-  // --- Saving new source ---
- Future<void> _addCustomSource(String sourceName, String url, String category) async {
-  if (sourceName.isEmpty || url.isEmpty) return;
-
-  try {
-    const String backendUrl = "http://192.168.1.125:8000/api/sources"; 
-    
-    final response = await http.post(
-      Uri.parse(backendUrl),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "name": sourceName,
-        "url": url,
-        "category": category,
-      }),
-    );
-
-    if (response.statusCode == 201) {
-      _nameController.clear();
-      _urlController.clear();
-      _loadLiveNews();
-    }
-  } catch (e) {
-    print("Problem: $e");
-  }
-}
-
- Future<void> _loadLiveNews() async {
-  _currentWordOffset = 0;
-
-  setState(() {
-    _fetchedText = "Loading news from source...";
-  });
-  
-  try {
-    const String backendUrl = "http://192.168.1.125:8000/api/news"; 
-
-
-    final response = await http.post(
-      Uri.parse(backendUrl),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "category": _currentChannel, 
-        "compression": _compressionLevel,
-      }),
-    );
-
-    if (response.statusCode == 200) {
-      final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
-      setState(() {
-        _fetchedText = data["content"] ?? "Text is None";
-      });
-    } else {
-      setState(() => _fetchedText = "Server error: ${response.statusCode}");
-    }
-  } catch (e) {
+    } catch (e) {
       setState(() => _fetchedText = "Can't connect. Check backend");
+    }
+
+    if (_isPlaying) {
+      _speak(_fetchedText);
+    }
   }
 
-  if (_isPlaying) {
-    _speak(_fetchedText);
-  }
-}
-
- void _speak(String text) async {
-  if (_isPlaying){
-    _updateTtsSettings();
+  Future<void> _speak(String text) async {
+    if (text.isEmpty) return;
+    await _updateTtsSettings();
 
     String textToSpeak = text;
     if (_currentWordOffset > 0 && _currentWordOffset < text.length) {
       textToSpeak = text.substring(_currentWordOffset);
     }
     await _flutterTts.speak(textToSpeak);
-  } 
- }
-
- void _stopSpeaking() async {
-    await _flutterTts.stop();
   }
 
-void _listen() async {
+  Future<void> _stop() async {
+    await _flutterTts.stop();
+    setState(() => _isPlaying = false);
+  }
+
+  void _listen() async {
     if (!_isListening) {
       if (_isPlaying) {
-        setState(() => _isPlaying = false);
-        _stopSpeaking();
+        await _stop();
       }
 
       bool available = await _speech.initialize(
         onStatus: (val) => print('Status: $val'),
-        onError: (val) => print('Error: $val'),
       );
       if (available) {
         setState(() => _isListening = true);
         _speech.listen(
-        localeId: _selectedLanguage,
+          localeId: _selectedLanguage,
           onResult: (val) => setState(() {
             _recognizedText = val.recognizedWords;
             if (val.finalResult) {
@@ -232,27 +207,22 @@ void _listen() async {
     }
   }
 
-  // Intent Parser
   void _executeCommand(String text) async {
     String t = text.toLowerCase();
 
-    if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини")) {
-      setState(() => _isPlaying = false);
-      _stopSpeaking();
+    if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
+      await _stop();
       return;
     }
+
     String nextChannel = _currentChannel;
-    String nextCompression = _compressionLevel;
-    bool shouldPlay = _isPlaying;
+    String nextCompression = _selectedCompression;
 
-    if (t.contains("play") || t.contains("вруби") || t.contains("увімкни") || t.contains("слухати")) {
-      shouldPlay = true;
-    }
-
-    for (String channelName in _customRssUrls.keys) {
-      if (t.contains(channelName.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), ''))) {
-        nextChannel = channelName;
-        shouldPlay = true;
+    // Шукаємо збіги серед динамічних каналів/категорій, отриманих з сервера
+    for (String cat in _dynamicCategories) {
+      String cleanCat = cat.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
+      if (t.contains(cleanCat) && cleanCat.isNotEmpty) {
+        nextChannel = cat;
         break;
       }
     }
@@ -260,66 +230,19 @@ void _listen() async {
     if (t.contains("коротко") || t.contains("стисло") || t.contains("головне")) {
       nextCompression = "Compressed(only main thought)";
     } else if (t.contains("детальн") || t.contains("детальніше")) {
-      nextCompression = "Detailed";
+      nextCompression = "Detailed summary";
     }
 
     setState(() {
       _currentChannel = nextChannel;
-      _compressionLevel = nextCompression;
-      _isPlaying = shouldPlay;
+      _selectedCompression = nextCompression;
     });
 
     await _loadLiveNews();
   }
 
   @override
-  void dispose() {
-    _flutterTts.stop();
-    super.dispose();
-  }
-
-void _showAddSourceDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1E1E1E),
-        title: const Text("Add your source"),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: "Name"),
-            ),
-            TextField(
-              controller: _urlController,
-              decoration: const InputDecoration(labelText: "Link"),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              _addCustomSource(_nameController.text, _urlController.text, _categoryController.text);
-              Navigator.pop(context);
-            },
-            child: const Text("Add"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final List<String> allowedLanguages = ["uk-UA", "en-US", "en-UK"];
-    if (!allowedLanguages.contains(_selectedLanguage)) {
-      _selectedLanguage = "en-UK";
-    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Styslo'),
@@ -327,17 +250,46 @@ void _showAddSourceDialog() {
         backgroundColor: Colors.black,
         actions: [
           IconButton(
-            icon: const Icon(Icons.add_circle_outline, color: Colors.blueAccent),
-            onPressed: _showAddSourceDialog,
-          )
+            icon: const Icon(Icons.settings, color: Colors.blueAccent),
+            tooltip: "Налаштування мовлення",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SettingsScreen(
+                    initialLanguage: _selectedLanguage,
+                    initialSpeechRate: _speechRate,
+                    onLanguageChanged: (newLang) {
+                      setState(() => _selectedLanguage = newLang);
+                    },
+                    onSpeechRateChanged: (newRate) {
+                      setState(() => _speechRate = newRate);
+                      _updateTtsSettings();
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.list_alt, color: Colors.blueAccent),
+            tooltip: "Керування джерелами",
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SourcesScreen()),
+              ).then((_) {
+                _fetchCategories();
+              });
+            },
+          ),
         ],
       ),
-      body: SingleChildScrollView( 
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // --- Player screen---
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -351,13 +303,13 @@ void _showAddSourceDialog() {
                   GestureDetector(
                     onTap: () {
                       setState(() {
-                        _isPlaying = !_isPlaying; 
+                        _isPlaying = !_isPlaying;
                       });
-                      
+
                       if (_isPlaying) {
                         _speak(_fetchedText);
                       } else {
-                        _stopSpeaking();
+                        _stop(); // Виправлено виклик неіснуючого методу
                       }
                     },
                     child: CircleAvatar(
@@ -371,129 +323,56 @@ void _showAddSourceDialog() {
                     ),
                   ),
                   const SizedBox(height: 15),
-
-                  DropdownButton<String>(
-                    value: _customRssUrls.containsKey(_currentChannel) ? _currentChannel : _customRssUrls.keys.first,
-                    dropdownColor: const Color(0xFF1E1E1E),
-                    style: const TextStyle(fontSize: 22, color: Colors.white),
-                    items: _customRssUrls.keys.map((String channel) {
-                      return DropdownMenuItem<String>(
-                        value: channel,
-                        child: Text(channel),
-                      );
-                    }).toList(),
-                    onChanged: (String? newValue) {
-                      if (newValue != null) {
-                        setState(() {
-                          _currentChannel = newValue;
-                        });
-                        _loadLiveNews();
-                      }
-                    },
+                  _isCategoriesLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : DropdownButton<String>(
+                          value: _currentChannel,
+                          dropdownColor: Colors.black,
+                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                          icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
+                          items: _dynamicCategories.map<DropdownMenuItem<String>>((String value) {
+                            return DropdownMenuItem<String>(
+                              value: value,
+                              child: Text(value),
+                            );
+                          }).toList(),
+                          onChanged: (String? newValue) {
+                            if (newValue != null) {
+                              setState(() {
+                                _currentChannel = newValue;
+                              });
+                              _loadLiveNews();
+                            }
+                          },
+                        ),
+                  const SizedBox(height: 20),
+                  Text(
+                    "Listened: \"$_recognizedText\"",
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
                   ),
-                  const SizedBox(height: 10),
-
-                  Text("Compression level: $_compressionLevel", style: const TextStyle(fontSize: 14, color: Colors.white70), textAlign: TextAlign.center),
+                  const SizedBox(height: 50),
+                  GestureDetector(
+                    onTap: _listen,
+                    child: CircleAvatar(
+                      radius: 45,
+                      backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
+                      child: Icon(
+                        _isListening ? Icons.mic : Icons.mic_none,
+                        size: 40,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 15),
+                  Text(_isListening ? "Listening..." : "Press me", style: const TextStyle(color: Colors.white54)),
                 ],
               ),
             ),
-            const SizedBox(height: 25),
-            
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1A1A1A),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                children: [
-                  // Language selection
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("Language:"),
-                      DropdownButton<String>(
-                        value: _selectedLanguage,
-                        dropdownColor: const Color(0xFF1E1E1E),
-                        items: const [
-                          DropdownMenuItem(value: "uk-UA", child: Text("Українська 🇺🇦")),
-                          DropdownMenuItem(value: "en-US", child: Text("English 🇺🇸")),
-                          DropdownMenuItem(value: "en-UK", child: Text("English (UK) 🇬🇧")),
-                        ],
-                        onChanged: (String? newLang) {
-                          if (newLang != null) {
-                            setState(() {
-                              _selectedLanguage = newLang;
-                            });
-                            _updateTtsSettings();
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                  const Divider(color: Colors.white24),
-                  
-                  // Rate slider
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Speech rate: ${_speechRate.toStringAsFixed(1)}"),
-                      Slider(
-                        value: _speechRate,
-                        min: 0.1,
-                        max: 1.0,
-                        activeColor: Colors.blueAccent,
-                        onChanged: (value) {
-                          setState(() => _speechRate = value);
-                          _updateTtsSettings();
-                        },
-                      ),
-                    ],
-                  ),
-                  
-                  // Loudness slider
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text("Volume: ${(_volume * 100).toInt()}%"),
-                      Slider(
-                        value: _volume,
-                        min: 0.0,
-                        max: 1.0,
-                        activeColor: Colors.greenAccent,
-                        onChanged: (value) {
-                          setState(() => _volume = value);
-                          _updateTtsSettings();
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 25),
-
-            Text(
-              "Listened: \"$_recognizedText\"",
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
-            ),
-            const SizedBox(height: 50),
-            
-            GestureDetector(
-              onTap: _listen,
-              child: CircleAvatar(
-                radius: 45,
-                backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
-                child: Icon(
-                  _isListening ? Icons.mic : Icons.mic_none,
-                  size: 40,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-            const SizedBox(height: 15),
-            Text(_isListening ? "Listening..." : "Press me", style: const TextStyle(color: Colors.white54)),
           ],
         ),
       ),

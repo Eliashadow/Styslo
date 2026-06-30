@@ -3,3 +3,7 @@
 /.idea/
 /.vscode/
 /.flutter-plugins-dependencies
+lib/styslo.db
+/.dart_tool/
+*.pyc
+__pycache__/
