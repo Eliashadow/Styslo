@@ -4,7 +4,6 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 
-// Переконайся, що ці файли створені поруч
 import 'sources_screen.dart';
 import 'settings_screen.dart';
 
@@ -40,26 +39,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
   late stt.SpeechToText _speech;
   final FlutterTts _flutterTts = FlutterTts();
 
-  // --- Конфігурація мережі ---
-  String _currentChannel = "General"; // Початкове значення за дефолтом
-  List<String> _dynamicCategories = ["General"]; // Масив, куди завантажуємо категорії з БД
+  // ----Categories----
+  String _currentChannel = "General"; 
+  List<String> _dynamicCategories = ["General"]; 
   bool _isCategoriesLoading = true;
 
-  final String _apiBaseUrl = "http://192.168.1.125:8000/api"; // Твій IP бекенду
+// ----Server related----
+  final String _apiBaseUrl = "http://192.168.1.125:8000/api";
+  Map<String, dynamic> _remoteCategories = {};
+  Map<String, dynamic> _remoteCompression = {};
+  bool _isConfigLoaded = false;
 
-  // --- Стан голосового керування ---
+  // ----Intent parser----
   bool _isListening = false;
-  String _recognizedText = 'чекаю на команду';
+  String _recognizedText = 'waiting...';
 
-  // --- Стан TTS та Плеєра ---
+  // ----TTS Settings----
   String _selectedLanguage = "uk-UA";
   double _speechRate = 0.5;
   bool _isPlaying = false;
   String _fetchedText = 'Waiting';
-
   int _currentWordOffset = 0;
-
-  // --- Керування компресією ---
   String _selectedCompression = "Compressed(only main thought)";
 
   @override
@@ -67,7 +67,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.initState();
     _speech = stt.SpeechToText();
     _initTts();
-    _fetchCategories();
+    _fetchConfig();
+    
   }
 
   void _initTts() async {
@@ -92,7 +93,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     _flutterTts.setErrorHandler((msg) {
       setState(() => _isPlaying = false);
-      print("Помилка TTS: $msg");
+      print("Error TTS: $msg");
     });
   }
 
@@ -101,31 +102,31 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await _flutterTts.setSpeechRate(_speechRate);
   }
 
-  Future<void> _fetchCategories() async {
-    try {
-      final response = await http.get(Uri.parse("$_apiBaseUrl/sources"));
-      if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(utf8.decode(response.bodyBytes));
-
-        // Витягуємо тільки імена категорій
-        List<String> fetchedCats = data.map<String>((item) => item["category_name"] as String).toList();
-
-        if (fetchedCats.isNotEmpty) {
-          setState(() {
-            _dynamicCategories = fetchedCats;
-
-            if (!_dynamicCategories.contains(_currentChannel)) {
-              _currentChannel = _dynamicCategories.first;
-            }
-            _isCategoriesLoading = false;
-          });
+Future<void> _fetchConfig() async {
+  try {
+    final response = await http.get(Uri.parse("$_apiBaseUrl/config"));
+    if (response.statusCode == 200) {
+      final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+      
+      setState(() {
+        _remoteCategories = data["categories"] ?? {};
+        _remoteCompression = data["compression"] ?? {};
+        
+        // Оновлюємо список категорій для випадаючого списку Dropdown
+        _dynamicCategories = _remoteCategories.keys.toList();
+        
+        if (_dynamicCategories.isNotEmpty && !_dynamicCategories.contains(_currentChannel)) {
+          _currentChannel = _dynamicCategories.first;
         }
-      }
-    } catch (e) {
-      print("Помилка завантаження категорій для плеєра: $e");
-      setState(() => _isCategoriesLoading = false);
+        _isCategoriesLoading = false;
+        _isConfigLoaded = true;
+      });
     }
+  } catch (e) {
+    print("Error fetching remote config: $e");
+    // Якщо сервер лежить, викликаємо ваш старий метод як бекап
   }
+}
 
   Future<void> _loadLiveNews() async {
     _currentWordOffset = 0;
@@ -142,7 +143,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "category": _currentChannel,
-          "compression": _selectedCompression, // Виправлено помилку з невідомою змінною
+          "compression": _selectedCompression, 
         }),
       );
 
@@ -208,37 +209,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _executeCommand(String text) async {
-    String t = text.toLowerCase();
+    String t = text.toLowerCase().replaceAll(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]', '').trim();
 
     if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
       await _stop();
       return;
     }
+    if (!_isConfigLoaded) return;
 
+    
     String nextChannel = _currentChannel;
     String nextCompression = _selectedCompression;
+    bool isChanged = false;
 
-    // Шукаємо збіги серед динамічних каналів/категорій, отриманих з сервера
-    for (String cat in _dynamicCategories) {
-      String cleanCat = cat.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
-      if (t.contains(cleanCat) && cleanCat.isNotEmpty) {
-        nextChannel = cat;
-        break;
+    categoryLoop:
+    for (var entry in _remoteCategories.entries) {
+      String catName = entry.key;
+      List<dynamic> triggers = entry.value;
+
+      for (var trigger in triggers) {
+        if (t.contains(trigger.toString().toLowerCase())) {
+          nextChannel = catName;
+          break categoryLoop;
+        }
       }
     }
 
-    if (t.contains("коротко") || t.contains("стисло") || t.contains("головне")) {
-      nextCompression = "Compressed(only main thought)";
-    } else if (t.contains("детальн") || t.contains("детальніше")) {
-      nextCompression = "Detailed summary";
+    compressionLoop:
+    for (var entry in _remoteCompression.entries) {
+      String compMode = entry.key;
+      List<dynamic> triggers = entry.value;
+
+      for (var trigger in triggers) {
+        if (t.contains(trigger.toString().toLowerCase())) {
+          nextCompression = compMode;
+          break compressionLoop;
+        }
+      }
     }
 
-    setState(() {
+    if (nextChannel != _currentChannel || nextCompression != _selectedCompression){
+      isChanged = true;
+    }
+
+    if(isChanged){
+      setState(() {
       _currentChannel = nextChannel;
       _selectedCompression = nextCompression;
     });
 
-    await _loadLiveNews();
+      await _loadLiveNews();
+    }
+    
+      if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source..." && _fetchedText != "Can't connect. Check backend") {
+        await _speak(_fetchedText);
+      }
   }
 
   @override
@@ -251,7 +276,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.blueAccent),
-            tooltip: "Налаштування мовлення",
+            tooltip: "TTS settings",
             onPressed: () {
               Navigator.push(
                 context,
@@ -273,13 +298,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.list_alt, color: Colors.blueAccent),
-            tooltip: "Керування джерелами",
+            tooltip: "Source settings",
             onPressed: () {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const SourcesScreen()),
               ).then((_) {
-                _fetchCategories();
+                _fetchConfig();
               });
             },
           ),
@@ -309,7 +334,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       if (_isPlaying) {
                         _speak(_fetchedText);
                       } else {
-                        _stop(); // Виправлено виклик неіснуючого методу
+                        _stop();
                       }
                     },
                     child: CircleAvatar(

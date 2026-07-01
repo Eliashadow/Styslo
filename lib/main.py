@@ -13,11 +13,11 @@ from parser import parse_rss_sources
 scheduler = BackgroundScheduler()
 
 def run_background_parser():
-    print("[Scheduler] Запуск автоматичного парсингу новин за розкладом...")
+    print("[Scheduler] Automated startup of parsing by schedule...")
     db = SessionLocal()  
     try:
         parse_rss_sources(db)  
-        print("[Scheduler] Фоновий парсинг успішно завершено.")
+        print("[Scheduler] Background parsing completed successfully.")
     except Exception as e:
         print(f"[Scheduler] Помилка планувальника: {e}")
     finally:
@@ -28,17 +28,16 @@ def run_background_parser():
 async def lifespan(app: FastAPI):
     init_db()
     print("[БД] Базу даних успішно ініціалізовано.")
-    
-
-    scheduler.add_job(run_background_parser, 'interval', seconds=900, id='news_parser_job')
+    seconds = 900
+    scheduler.add_job(run_background_parser, 'interval', seconds=seconds, id='news_parser_job')
     scheduler.start()
-    print("[FastAPI] Фоновий планувальник задач запущено (тестовий інтервал: 900 сек).")
+    print(f"[FastAPI] Background scheduler started (test interval: {seconds} seconds).")
     
     yield  
     
 
     scheduler.shutdown()
-    print("[FastAPI] Фоновий планувальник задач зупинено.")
+    print("[FastAPI] Background scheduler stopped.")
 
 app = FastAPI(
     title="Styslo Backend API",
@@ -67,12 +66,11 @@ class SourceRequest(BaseModel):
 class CategoryRequest(BaseModel):
     name: str
 
-# Ендпоінти API
 @app.get("/")
 def read_root():
     return {"status": "Styslo Backend is running"}
 
-def summarize_news(news_text: str, compression_level: str) -> str:
+async def summarize_news(news_text: str, compression_level: str) -> str:
     if compression_level == "Compressed(only main thought)":
         prompt = f"Стислий підсумок українською мовою строго в 1 коротке речення (головна думка) для радіо-дайджесту: {news_text}"
     else:
@@ -85,8 +83,24 @@ def summarize_news(news_text: str, compression_level: str) -> str:
         )
         return response['response'].strip()
     except Exception as e:
-        print(f"Помилка Ollama: {e}")
-        return "Не вдалося згенерувати підсумок ШІ."
+        print(f"Error Ollama: {e}")
+        return "Cant generate summary due to an error."
+
+@app.get("/api/config")
+def get_config(db: Session = Depends(get_db)):
+               
+    categories = db.query(Category).all()
+
+    config = {}
+
+    for cat in categories:
+        config[cat.name] = [cat.name.lower()]
+
+    return {
+        'categories': config,
+        'compression_levels': ["Compressed(only main thought)", "Detailed(3-4 sentences)"]
+    }
+
 
 @app.post("/api/sources", status_code=201)
 async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
@@ -100,7 +114,7 @@ async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
             break
             
     if not category:
-        print(f"[БД] Категорії '{incoming_category}' не знайдено. Створюємо на льоту...")
+        print(f"[DB] Category '{incoming_category}' not found. Creating on the fly...")
         category = Category(name=incoming_category)
         db.add(category)
         db.commit()
@@ -112,7 +126,7 @@ async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
     ).first()
     
     if existing_source:
-        return {"status": "exists", "message": f"Джерело вже прив'язане до категорії {category.name}"}
+        return {"status": "exists", "message": f"Source is already linked to the category {category.name}"}
 
     new_source = Source(
         category_id=category.id,
@@ -124,10 +138,10 @@ async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
     db.add(new_source)
     db.commit()
     
-    print(f"[БД] Успішно додано джерело '{new_source.name}' до категорії '{category.name}'")
+    print(f"[DB] Successfully added source '{new_source.name}' to category '{category.name}'")
     return {
         "status": "success",
-        "message": f"Джерело '{new_source.name}' додано до категорії '{category.name}'"
+        "message": f"Source '{new_source.name}' added to category '{category.name}'"
     }  
 
 @app.post("/api/news")
@@ -137,7 +151,7 @@ async def get_news(request: Request, db: Session = Depends(get_db)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON format")
         
-    print(f"\n[DEBUG] Отримано дані від Flutter: {data}\n")
+    print(f"\n[DEBUG] Given data by Flutter: {data}\n")
 
     req_category = data.get("category", "General")
     req_compression = data.get("compression", "Compressed(only main thought)")
@@ -151,25 +165,25 @@ async def get_news(request: Request, db: Session = Depends(get_db)):
             break
             
     if not category:
-        print(f"[БД] Категорії '{incoming_category}' немає. Створюємо...")
+        print(f"[DB] Category '{incoming_category}' not found. Creating on the fly...")
         category = Category(name=incoming_category)
         db.add(category)
         db.commit()
         db.refresh(category)
-        return {"title": category.name, "content": f"Створено нову категорію '{category.name}'. Додайте RSS-джерела."}
+        return {"title": category.name, "content": f"Created new category '{category.name}'. Add RSS sources."}
 
     source_ids = [source.id for source in category.sources if source.is_active]
     if not source_ids:
-        return {"title": category.name, "content": "Немає активних джерел у цій категорії."}
+        return {"title": category.name, "content": "No active sources in this category."}
 
     latest_articles = db.query(Article).filter(Article.source_id.in_(source_ids)).order_by(Article.published_at.desc()).limit(3).all()
 
     if not latest_articles:
-        return {"title": category.name, "content": "Новин в базі немає. Зачекайте фонового оновлення парсера."}
+        return {"title": category.name, "content": "No news available in the database. Please wait for the background parser to update."}
 
     main_title = latest_articles[0].title
-    combined_news_text = "\n\n".join([f"Новина: {a.title}. {a.raw_text}" for a in latest_articles])
-    final_content = summarize_news(combined_news_text, req_compression)
+    combined_news_text = "\n\n".join([f"Новина: {a.title}. {a.raw_text or ''}" for a in latest_articles])
+    final_content = await summarize_news(combined_news_text, req_compression)
 
     return {
         "title": main_title,
@@ -199,22 +213,22 @@ def get_all_sources(db: Session = Depends(get_db)):
 def delete_source(source_id: int, db: Session = Depends(get_db)):
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
-        raise HTTPException(status_code=404, detail="Джерело не знайдено")
+        raise HTTPException(status_code=404, detail="Sources not found")
     db.delete(source)
     db.commit()
-    return {"status": "success", "message": f"Джерело {source_id} успішно видалено"}
+    return {"status": "success", "message": f"Source {source_id} deleted successfully"}
 
 @app.post("/api/categories", status_code=201)
 def create_category(request: CategoryRequest, db: Session = Depends(get_db)):
     name_clean = request.name.strip()
     existing = db.query(Category).filter(func.lower(Category.name) == func.lower(name_clean)).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Така категорія вже існує")
+        raise HTTPException(status_code=400, detail="Such category already exists.")
         
     new_cat = Category(name=name_clean)
     db.add(new_cat)
     db.commit()
-    return {"status": "success", "message": f"Категорію '{name_clean}' успішно створено"}
+    return {"status": "success", "message": f"Category '{name_clean}' created successfully"}
 
 @app.delete("/api/categories/{cat_name}")
 def delete_category(cat_name: str, db: Session = Depends(get_db)):
@@ -227,11 +241,11 @@ def delete_category(cat_name: str, db: Session = Depends(get_db)):
             break
 
     if not category:
-        raise HTTPException(status_code=404, detail=f"Категорію не знайдено.")
+        raise HTTPException(status_code=404, detail=f"Category not found.")
         
     db.delete(category)
     db.commit()
-    return {"status": "success", "message": f"Категорію '{category.name}' успішно видалено"}
+    return {"status": "success", "message": f"Category '{category.name}' deleted successfully"}
 
 if __name__ == "__main__":
     import uvicorn

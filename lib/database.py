@@ -25,8 +25,8 @@ class Source(Base):
     id = Column(Integer, primary_key=True, index=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     name = Column(String, nullable=False)
-    source_type = Column(String, nullable=False)  # "rss", "telegram", "api"
-    url_or_credentials = Column(String, nullable=False)  # Лінк або юзернейм каналу
+    source_type = Column(String, nullable=False)  # "rss", "telegram", "api" in future
+    url_or_credentials = Column(String, nullable=False)  
     is_active = Column(Boolean, default=True)
     
 
@@ -67,15 +67,12 @@ class Digest(Base):
 
 
 def init_db():
-
     Base.metadata.create_all(bind=engine)
-    
     db = SessionLocal()
     try:
         if db.query(Category).count() == 0:
-            print("База порожня. Наповнюємо тестовими даними...")
+            print("DB is empty. Populating with test data...")
             
-            # 1. Створюємо категорії (як у твоєму Flutter додатку)
             general = Category(name="General")
             techno = Category(name="Tecnologies 💻")
             politics = Category(name="Politics 🏛️")
@@ -95,7 +92,7 @@ def init_db():
             
             db.add_all(sources)
             db.commit()
-            print("Тестові дані успішно додано!")
+            print("Test data added successfully!")
     finally:
         db.close()
 

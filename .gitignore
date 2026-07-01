@@ -7,3 +7,6 @@ lib/styslo.db
 /.dart_tool/
 *.pyc
 __pycache__/
+/macos/
+/linux/
+/windows/

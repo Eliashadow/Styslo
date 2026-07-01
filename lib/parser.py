@@ -18,18 +18,18 @@ def parse_rss_sources(db: Session):
     try:
 
         rss_sources = db.query(Source).filter(Source.source_type == "rss", Source.is_active == True).all()
-        print(_dt_log(), f"Знайдено {len(rss_sources)} активних RSS-джерел для опитування.")
+        print(_dt_log(), f"Found {len(rss_sources)} active RSS sources for polling.")
 
         for source in rss_sources:
 
             url = getattr(source, "url_or_credentials", getattr(source, "url", ""))
-            print(_dt_log(), f"Парсимо джерело: {source.name} ({url})")
+            print(_dt_log(), f"Parsing source: {source.name} ({url})")
             
             feed = feedparser.parse(url)
             new_articles_count = 0
             
             for entry in feed.entries:
-                title = entry.get("title", "Без назви")
+                title = entry.get("title", "Without title")
                 link = entry.get("link", "")
                 
                 raw_text = ""
@@ -66,20 +66,20 @@ def parse_rss_sources(db: Session):
                 new_articles_count += 1
             
             db.commit() 
-            print(_dt_log(), f"Успішно додано {new_articles_count} нових статей з джерела {source.name}.")
+            print(_dt_log(), f"Successfully added {new_articles_count} new articles from source {source.name}.")
             
     except Exception as e:
-        print(_dt_log(), f"Помилка під час парсингу: {e}")
+        print(_dt_log(), f"Error occurred while parsing: {e}")
         db.rollback()
 
 def _dt_log():
     return f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"
 
 if __name__ == "__main__":
-    print("Запуск збору новин вручну...")
+    print("Starting news collection manually...")
     standalone_db = SessionLocal()
     try:
         parse_rss_sources(standalone_db)
     finally:
         standalone_db.close()
-    print("Збір завершено.")
+    print("News collection completed.")

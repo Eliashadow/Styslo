@@ -35,7 +35,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
         });
       }
     } catch (e) {
-      print("Помилка завантаження: $e");
+      print("Error loading: $e");
       setState(() => _isLoading = false);
     }
   }
@@ -52,11 +52,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
         _categoryController.clear();
         _fetchSources();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Категорію '$name' створено")),
+          SnackBar(content: Text("Category '$name' created")),
         );
       }
     } catch (e) {
-      print("Помилка створення категорії: $e");
+      print("Error of creating category: $e");
     }
   }
 
@@ -77,11 +77,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
         _sourceUrlController.clear();
         _fetchSources(); 
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Джерело додано до категорії $catName")),
+          SnackBar(content: Text("Source added to category $catName")),
         );
       }
     } catch (e) {
-      print("Помилка додавання джерела: $e");
+      print("Error adding source: $e");
     }
   }
 
@@ -91,11 +91,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
       if (response.statusCode == 200) {
         _fetchSources();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Категорію '$catName' видалено")),
+          SnackBar(content: Text("Category '$catName' deleted")),
         );
       }
     } catch (e) {
-      print("Помилка видалення категорії: $e");
+      print("Error deleting category: $e");
     }
   }
 
@@ -105,11 +105,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
       if (response.statusCode == 200) {
         _fetchSources();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Джерело видалено")),
+          const SnackBar(content: Text("Source deleted")),
         );
       }
     } catch (e) {
-      print("Помилка видалення джерела: $e");
+      print("Error deleting source: $e");
     }
   }
 
@@ -117,19 +117,19 @@ class _SourcesScreenState extends State<SourcesScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text("Нова категорія"),
+        title: const Text("New category"),
         content: TextField(
           controller: _categoryController,
-          decoration: const InputDecoration(hintText: "Назва (наприклад: Спорт ⚽)"),
+          decoration: const InputDecoration(hintText: "Name (e.g., Sports ⚽)"),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Скасувати")),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () {
               _addCategory(_categoryController.text);
               Navigator.pop(context);
             },
-            child: const Text("Додати"),
+            child: const Text("Add"),
           ),
         ],
       ),
@@ -140,29 +140,29 @@ class _SourcesScreenState extends State<SourcesScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text("Додати джерело в $catName"),
+        title: Text("Add source to $catName"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: _sourceNameController,
-              decoration: const InputDecoration(hintText: "Назва (наприклад: ТСН)"),
+              decoration: const InputDecoration(hintText: "Name (e.g., TSN)"),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: _sourceUrlController,
-              decoration: const InputDecoration(hintText: "RSS URL посилання"),
+              decoration: const InputDecoration(hintText: "RSS URL link"),
             ),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Скасувати")),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () {
               _addSourceToCategory(catName, _sourceNameController.text, _sourceUrlController.text);
               Navigator.pop(context);
             },
-            child: const Text("Додати"),
+            child: const Text("Add"),
           ),
         ],
       ),
@@ -173,11 +173,11 @@ class _SourcesScreenState extends State<SourcesScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Мої Джерела Новин"),
+        title: const Text("My sources"),
         actions: [
           IconButton(
             icon: const Icon(Icons.add_box, color: Colors.greenAccent),
-            tooltip: "Створити категорію",
+            tooltip: "Create category",
             onPressed: _showAddCategoryDialog,
           ),
           IconButton(
@@ -189,7 +189,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _categoriesWithSources.isEmpty
-              ? const Center(child: Text("База даних порожня"))
+              ? const Center(child: Text("Database is empty"))
               : ListView.builder(
                   itemCount: _categoriesWithSources.length,
                   itemBuilder: (context, index) {
@@ -206,34 +206,34 @@ class _SourcesScreenState extends State<SourcesScreen> {
                           catName,
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
                         ),
-                        subtitle: Text("Джерел: ${sources.length}"),
+                        subtitle: Text("Sources: ${sources.length}"),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
 
                             IconButton(
                               icon: const Icon(Icons.add_circle_outline, color: Colors.blueAccent),
-                              tooltip: "Додати RSS-джерело в цю категорію",
+                              tooltip: "Add RSS source to this category",
                               onPressed: () => _showAddSourceDialog(catName),
                             ),
         
                             IconButton(
                               icon: const Icon(Icons.delete_forever, color: Colors.deepOrange),
-                              tooltip: "Видалити категорію разом з джерелами",
+                              tooltip: "Delete category with all sources",
                               onPressed: () {
                                 showDialog(
                                   context: context,
                                   builder: (context) => AlertDialog(
-                                    title: const Text("Видалити категорію?"),
-                                    content: Text("Це видалить категорію '$catName' та всі її джерела."),
+                                    title: const Text("Delete category?"),
+                                    content: Text("This will delete the category '$catName' and all its sources."),
                                     actions: [
-                                      TextButton(onPressed: () => Navigator.pop(context), child: const Text("Ні")),
+                                      TextButton(onPressed: () => Navigator.pop(context), child: const Text("No")),
                                       TextButton(
                                         onPressed: () {
                                           _deleteCategory(catName);
                                           Navigator.pop(context);
                                         },
-                                        child: const Text("Так, видалити", style: TextStyle(color: Colors.red)),
+                                        child: const Text("Yes, delete", style: TextStyle(color: Colors.red)),
                                       ),
                                     ],
                                   ),
