@@ -47,7 +47,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             //language
             const Text(
-              "Мова озвучення (TTS)",
+              "Language (TTS)",
               style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
@@ -86,7 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             // --- spech rate ---
             Text(
-              "Швидкість мовлення: ${_speechRate.toStringAsFixed(1)}",
+              "Speech rate: ${_speechRate.toStringAsFixed(1)}",
               style: const TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),

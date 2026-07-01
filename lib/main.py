@@ -27,7 +27,7 @@ def run_background_parser():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    print("[БД] Базу даних успішно ініціалізовано.")
+    print("[DB] Data base initialized successfully")
     seconds = 900
     scheduler.add_job(run_background_parser, 'interval', seconds=seconds, id='news_parser_job')
     scheduler.start()

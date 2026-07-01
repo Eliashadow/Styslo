@@ -112,7 +112,6 @@ Future<void> _fetchConfig() async {
         _remoteCategories = data["categories"] ?? {};
         _remoteCompression = data["compression"] ?? {};
         
-        // Оновлюємо список категорій для випадаючого списку Dropdown
         _dynamicCategories = _remoteCategories.keys.toList();
         
         if (_dynamicCategories.isNotEmpty && !_dynamicCategories.contains(_currentChannel)) {
@@ -124,7 +123,6 @@ Future<void> _fetchConfig() async {
     }
   } catch (e) {
     print("Error fetching remote config: $e");
-    // Якщо сервер лежить, викликаємо ваш старий метод як бекап
   }
 }
 

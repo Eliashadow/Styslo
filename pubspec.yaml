@@ -38,8 +38,6 @@ dependencies:
   http: ^1.2.0
   dart_rss: ^3.0.3
 
-  
-
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

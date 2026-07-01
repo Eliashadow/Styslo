@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -60,7 +59,6 @@ class Digest(Base):
     audio_url = Column(String, nullable=True)          
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Зв'язки
     article = relationship("Article", back_populates="digests")
 
 
