@@ -45,7 +45,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isCategoriesLoading = true;
 
 // ----Server related----
-  final String _apiBaseUrl = "http://192.168.1.125:8000/api";
+  final String _apiBaseUrl = "http://192.168.1.101:8000/api";
   Map<String, dynamic> _remoteCategories = {};
   Map<String, dynamic> _remoteCompression = {};
   bool _isConfigLoaded = false;
@@ -53,6 +53,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ----Intent parser----
   bool _isListening = false;
   String _recognizedText = 'waiting...';
+  String _selectedCommandMode = 'voice';
+  final TextEditingController _commandController = TextEditingController();
 
   // ----TTS Settings----
   String _selectedLanguage = "uk-UA";
@@ -62,6 +64,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _currentWordOffset = 0;
   String _selectedCompression = "Compressed(only main thought)";
 
+  
   @override
   void initState() {
     super.initState();
@@ -96,6 +99,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       print("Error TTS: $msg");
     });
   }
+
+@override
+void dispose() {
+  _commandController.dispose(); 
+  super.dispose();
+}
 
   Future<void> _updateTtsSettings() async {
     await _flutterTts.setLanguage(_selectedLanguage);
@@ -178,44 +187,89 @@ Future<void> _fetchConfig() async {
     setState(() => _isPlaying = false);
   }
 
-  void _listen() async {
-    if (!_isListening) {
-      if (_isPlaying) {
-        await _stop();
-      }
+void _listen() async {
+  if (_isListening && _selectedCommandMode == 'ok, styslo') return;
 
-      bool available = await _speech.initialize(
-        onStatus: (val) => print('Status: $val'),
-      );
-      if (available) {
-        setState(() => _isListening = true);
-        _speech.listen(
-          localeId: _selectedLanguage,
-          onResult: (val) => setState(() {
-            _recognizedText = val.recognizedWords;
-            if (val.finalResult) {
-              _isListening = false;
-              _executeCommand(_recognizedText);
-            }
-          }),
-        );
-      }
-    } else {
-      setState(() => _isListening = false);
-      _speech.stop();
+  if (!_isListening) {
+    if (_isPlaying && _selectedCommandMode != 'ok, styslo') {
+      await _stop();
     }
+
+    await _speech.stop();
+
+    bool available = await _speech.initialize(
+      onStatus: (status) {
+        print('Speech Status: $status');
+        
+        if (status == 'notListening' && _selectedCommandMode == 'ok, styslo') {
+          Future.delayed(const Duration(seconds: 1), () {
+            if (_selectedCommandMode == 'ok, styslo' && !_isListening) {
+              print('[DEBUG] Restarting listening for "ok, styslo" mode...');
+              _listen(); 
+            }
+          });
+        }
+      },
+      onError: (errorNotification) {
+        print('Speech Error: $errorNotification');
+        if (_selectedCommandMode == 'ok, styslo') {
+          setState(() => _isListening = false);
+          Future.delayed(const Duration(seconds: 1), () => _listen());
+        }
+      },
+    );
+
+    if (available) {
+      setState(() => _isListening = true);
+      
+      _speech.listen(
+        listenFor: const Duration(seconds: 30), 
+        pauseFor: const Duration(seconds: 10),
+        localeId: _selectedLanguage,
+        onResult: (val) {
+          setState(() {
+            _recognizedText = val.recognizedWords;
+          });
+          
+          if (val.finalResult) {
+            print('[DEBUG] final text recognized: $_recognizedText');
+            setState(() => _isListening = false);
+            _executeCommand(_recognizedText);
+          }
+        },
+      );
+    }
+  } else {
+    setState(() => _isListening = false);
+    _speech.stop();
   }
+}
 
   void _executeCommand(String text) async {
-    String t = text.toLowerCase().replaceAll(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]', '').trim();
+    String t = text.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
+
+    print("[PARSER DEBUG] Command: '$t' | Mode: $_selectedCommandMode");
+
+    if (_selectedCommandMode == 'ok, styslo') {
+    if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
+      t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
+      print("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
+    } else {
+      print("[PARSER DEBUG] Ignored: without wakeword.");
+      return;
+    }
+  }
 
     if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
       await _stop();
       return;
     }
-    if (!_isConfigLoaded) return;
 
-    
+    if (!_isConfigLoaded) {
+      print("[PARSER DEBUG] Error: Server config not loaded yet.");
+      return;
+    } 
+
     String nextChannel = _currentChannel;
     String nextCompression = _selectedCompression;
     bool isChanged = false;
@@ -228,6 +282,7 @@ Future<void> _fetchConfig() async {
       for (var trigger in triggers) {
         if (t.contains(trigger.toString().toLowerCase())) {
           nextChannel = catName;
+          print("[PARSER DEBUG] Category matched: '$catName' for trigger '$trigger'");
           break categoryLoop;
         }
       }
@@ -241,6 +296,7 @@ Future<void> _fetchConfig() async {
       for (var trigger in triggers) {
         if (t.contains(trigger.toString().toLowerCase())) {
           nextCompression = compMode;
+          print("[PARSER DEBUG] Compression matched: '$compMode' for trigger '$trigger'");
           break compressionLoop;
         }
       }
@@ -251,17 +307,22 @@ Future<void> _fetchConfig() async {
     }
 
     if(isChanged){
+      print("[PARSER DEBUG] Changes detected. Applying new settings: Channel: '$nextChannel', Compression: '$nextCompression'");
       setState(() {
       _currentChannel = nextChannel;
       _selectedCompression = nextCompression;
-    });
-
+    }); 
       await _loadLiveNews();
+    } else{
+      print("[PARSER DEBUG] No changes to apply.");
     }
     
       if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source..." && _fetchedText != "Can't connect. Check backend") {
         await _speak(_fetchedText);
+      } else {
+        print("[PARSER DEBUG] No text to speak. Current fetched text: '$_fetchedText'");
       }
+    
   }
 
   @override
@@ -274,7 +335,7 @@ Future<void> _fetchConfig() async {
         actions: [
           IconButton(
             icon: const Icon(Icons.settings, color: Colors.blueAccent),
-            tooltip: "TTS settings",
+            tooltip: "Settings",
             onPressed: () {
               Navigator.push(
                 context,
@@ -282,6 +343,21 @@ Future<void> _fetchConfig() async {
                   builder: (context) => SettingsScreen(
                     initialLanguage: _selectedLanguage,
                     initialSpeechRate: _speechRate,
+                    initialCommandMode: _selectedCommandMode,
+                    onCommandModeChanged: (newMode) {
+                      setState(() => _selectedCommandMode = newMode);
+
+                      if (newMode == 'ok, styslo') {
+                      print("[DEBUG] Main got Wake-word. Starting mic up...");
+                      Future.delayed(const Duration(milliseconds: 300), () {
+                        _listen(); 
+                      });
+                    } else {
+                      print("[DEBUG] Exiting styslo, ok shutting down mic.");
+                      _speech.stop();
+                      setState(() => _isListening = false);
+                    }
+                    },
                     onLanguageChanged: (newLang) {
                       setState(() => _selectedLanguage = newLang);
                     },
@@ -289,6 +365,7 @@ Future<void> _fetchConfig() async {
                       setState(() => _speechRate = newRate);
                       _updateTtsSettings();
                     },
+                    
                   ),
                 ),
               );
@@ -296,7 +373,7 @@ Future<void> _fetchConfig() async {
           ),
           IconButton(
             icon: const Icon(Icons.list_alt, color: Colors.blueAccent),
-            tooltip: "Source settings",
+            tooltip: "Source manager",
             onPressed: () {
               Navigator.push(
                 context,
@@ -373,32 +450,109 @@ Future<void> _fetchConfig() async {
                           },
                         ),
                   const SizedBox(height: 20),
-                  Text(
-                    "Listened: \"$_recognizedText\"",
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
-                  ),
-                  const SizedBox(height: 50),
-                  GestureDetector(
-                    onTap: _listen,
-                    child: CircleAvatar(
-                      radius: 45,
-                      backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
-                      child: Icon(
-                        _isListening ? Icons.mic : Icons.mic_none,
-                        size: 40,
-                        color: Colors.white,
+          Text(
+            "Listened: \"$_recognizedText\"",
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
+          ),
+          const SizedBox(height: 50),
+
+          //  VOICE (mic) ----
+          if (_selectedCommandMode == 'voice') ...[
+            GestureDetector(
+              onTap: _listen,
+              child: CircleAvatar(
+                radius: 45,
+                backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
+                child: Icon(
+                  _isListening ? Icons.mic : Icons.mic_none,
+                  size: 40,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 15),
+            Text(
+              _isListening ? "Listening..." : "Press me", 
+              style: const TextStyle(color: Colors.white54),
+            ),
+          ],
+
+          // ---- OK, STYSLO (background mode) ----
+          if (_selectedCommandMode == 'ok, styslo') ...[
+            const CircleAvatar(
+              radius: 45,
+              backgroundColor: Colors.teal,
+              child: Icon(
+                Icons.record_voice_over, 
+                size: 40,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 15),
+            const Text(
+              "Background mode: say  \"Okay, Styslo\"", 
+              style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold),
+            ),
+          ],
+
+          // ----  TEXT ----
+          if (_selectedCommandMode == 'text')
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.grey[900],
+                        borderRadius: BorderRadius.circular(30),
+                        border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+                      ),
+                      child: TextField(
+                        controller: _commandController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          hintText: "Enter command (e.g., sports detailed)...",
+                          hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                          border: InputBorder.none,
+                        ),
+                        onSubmitted: (value) {
+                          if (value.trim().isNotEmpty) {
+                            _executeCommand(value);
+                            _commandController.clear();
+                          }
+                        },
                       ),
                     ),
                   ),
-                  const SizedBox(height: 15),
-                  Text(_isListening ? "Listening..." : "Press me", style: const TextStyle(color: Colors.white54)),
+
+                  const SizedBox(width: 8),
+                  CircleAvatar(
+                    backgroundColor: Colors.blueAccent,
+                    radius: 24,
+                    child: IconButton(
+                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
+                      onPressed: () {
+                        if (_commandController.text.trim().isNotEmpty) {
+                          _executeCommand(_commandController.text);
+                          _commandController.clear();
+                        }
+                      },
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
+
+                  const SizedBox(height: 30),
+                ],
+              ),
+            ),
+          ]
+        )
       ),
-    );
+    ); 
   }
-}
+} 

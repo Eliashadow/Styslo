@@ -5,6 +5,8 @@ class SettingsScreen extends StatefulWidget {
   final ValueChanged<String> onLanguageChanged;
   final double initialSpeechRate;
   final ValueChanged<double> onSpeechRateChanged;
+  final String initialCommandMode;
+  final ValueChanged<String> onCommandModeChanged;
 
   const SettingsScreen({
     Key? key,
@@ -12,6 +14,8 @@ class SettingsScreen extends StatefulWidget {
     required this.initialSpeechRate,
     required this.onLanguageChanged,
     required this.onSpeechRateChanged,
+    required this.initialCommandMode,
+    required this.onCommandModeChanged,
 
   }) : super(key: key);
 
@@ -21,13 +25,16 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late String _selectedLanguage;
+  late String _selectedCommandMode;
   late double _speechRate;
   final List<String> _allowedLanguages = ["uk-UA", "en-US", "en-UK"];
+  final List<String> _allowedCommandModes = ['voice', 'text', 'ok, styslo'];
 
   @override
   void initState() {
     super.initState();
     _selectedLanguage = widget.initialLanguage;
+    _selectedCommandMode = widget.initialCommandMode;
     _speechRate = widget.initialSpeechRate;
   }
 
@@ -100,6 +107,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 setState(() => _speechRate = value);
                 widget.onSpeechRateChanged(value); 
               },
+            ),
+
+            const SizedBox(height: 30), 
+
+            Text(
+              "Mode of command parser:", 
+              style: const TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold)
+              ),
+
+            const SizedBox(height: 30), 
+
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedCommandMode,
+                  dropdownColor: Colors.grey[900],
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
+                  isExpanded: true,
+                  items: _allowedCommandModes.map((String mode) {
+                    String displayName = mode;
+                    if (mode == "voice") displayName = "Voice";
+                    if (mode == "text") displayName = "Text";
+                    if (mode == 'ok, styslo') displayName = "Ok, Styslo";
+                    return DropdownMenuItem<String>(value: mode, child: Text(displayName));
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _selectedCommandMode = newValue;
+                    });
+                    widget.onCommandModeChanged(newValue);
+                  }
+                },
+               ),
+              ),
             ),
           ],
         ),
