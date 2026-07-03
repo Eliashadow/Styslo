@@ -43,3 +43,15 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+subprojects {
+    afterEvaluate {
+        extensions.findByType<com.android.build.gradle.BaseExtension>()?.run {
+            if (namespace == null) {
+                // Для Kotlin DSL простіше й безпечніше задати дефолтний namespace 
+                // на основі імені плагіна, щоб не парсити XML вручну
+                namespace = "com.example.${project.name.replace("-", "_")}"
+            }
+        }
+    }
+}

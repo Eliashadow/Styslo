@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
+import 'package:vosk_flutter/vosk_flutter.dart';
 
 import 'sources_screen.dart';
 import 'settings_screen.dart';
@@ -55,6 +56,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String _recognizedText = 'waiting...';
   String _selectedCommandMode = 'voice';
   final TextEditingController _commandController = TextEditingController();
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
+  Model? _voskModel;
+  Recognizer? _recognizer;
+  SpeechService? _speechService;
+  bool _isVoskReady = false;
 
   // ----TTS Settings----
   String _selectedLanguage = "uk-UA";
@@ -69,6 +75,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void initState() {
     super.initState();
     _speech = stt.SpeechToText();
+    _initVosk();
     _initTts();
     _fetchConfig();
     
@@ -98,6 +105,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() => _isPlaying = false);
       print("Error TTS: $msg");
     });
+  }
+
+  void _initVosk() async {
+    print("[VOSK DEBUG] Initializing Vosk model...");
+    try{
+      final modelPath = await ModelLoader().loadFromAssets('assets/models/uk.zip');
+      _voskModel = await _vosk.createModel(modelPath);
+      _recognizer = await _vosk.createRecognizer(model: _voskModel!, sampleRate: 16000);
+
+      setState(() => _isVoskReady = true);
+      print("[VOSK DEBUG] Model initialized successfully.");
+    } catch (e) {
+      print("[VOSK DEBUG] Error initializing Vosk model: $e");
+    }
   }
 
 @override
@@ -188,62 +209,111 @@ Future<void> _fetchConfig() async {
   }
 
 void _listen() async {
-  if (_isListening && _selectedCommandMode == 'ok, styslo') return;
+  print('[VOSK DEBUG] Received request to start up mic. Current status: _isListening=$_isListening');
+
+  if (_selectedCommandMode == 'text'){
+    print('[VOSK DEBUG] Shutting down mic');
+    setState(() => _isListening = false);
+    try{
+      await _speechService?.stop();
+    } catch(e){
+      print('[VOSK DEBUG] Error is shutting down mic: $e');
+    }
+    _speechService = null;
+    return;
+  }
+
+  if (_isListening) {
+    print('[VOSK DEBUG] Mic is already listening. User wants to turn it off...');
+    setState(() => _isListening = false);
+    try {
+      await _speechService?.stop();
+    } catch (e) {
+      print('[VOSK DEBUG] Error in stopping active mic: $e');
+    }
+    _speechService = null;
+    return; 
+  }
+
+  if (_speechService != null) {
+    print('[VOSK DEBUG] Found active SpeechService. Destroying ...');
+    try{
+      await _speechService?.stop();
+    } catch (e) {
+      print('[VOSK DEBUG] Error in stopping old SpeechService: $e');
+    }
+
+    _speechService = null;
+    _isListening = false;
+  }
+
+
+  if (!_isVoskReady || _recognizer == null){
+    print("[VOSK DEBUG] Vosk is not ready.");
+    setState(() => _isListening = false);
+    return;
+  } 
 
   if (!_isListening) {
     if (_isPlaying && _selectedCommandMode != 'ok, styslo') {
       await _stop();
     }
 
-    await _speech.stop();
+    setState(() => _isListening = true);
 
-    bool available = await _speech.initialize(
-      onStatus: (status) {
-        print('Speech Status: $status');
-        
-        if (status == 'notListening' && _selectedCommandMode == 'ok, styslo') {
-          Future.delayed(const Duration(seconds: 1), () {
-            if (_selectedCommandMode == 'ok, styslo' && !_isListening) {
-              print('[DEBUG] Restarting listening for "ok, styslo" mode...');
-              _listen(); 
-            }
-          });
-        }
-      },
-      onError: (errorNotification) {
-        print('Speech Error: $errorNotification');
-        if (_selectedCommandMode == 'ok, styslo') {
-          setState(() => _isListening = false);
-          Future.delayed(const Duration(seconds: 1), () => _listen());
-        }
-      },
-    );
+      try {
+      print('[VOSK DEBUG] Iniatializing SpeechService...');
+      _speechService = await _vosk.initSpeechService(_recognizer!);
 
-    if (available) {
-      setState(() => _isListening = true);
-      
-      _speech.listen(
-        listenFor: const Duration(seconds: 30), 
-        pauseFor: const Duration(seconds: 10),
-        localeId: _selectedLanguage,
-        onResult: (val) {
-          setState(() {
-            _recognizedText = val.recognizedWords;
-          });
-          
-          if (val.finalResult) {
-            print('[DEBUG] final text recognized: $_recognizedText');
-            setState(() => _isListening = false);
-            _executeCommand(_recognizedText);
+      _speechService?.onResult().listen((jsonResult) {
+        try {
+          final Map<String, dynamic> parsed = json.decode(jsonResult);
+
+          if (parsed.containsKey('partial') && parsed['partial'].toString().isNotEmpty) {
+            print("[VOSK DEBUG] Partial result: ${parsed['partial']}");
           }
-        },
-      );
+
+          if (parsed.containsKey('text') && parsed['text'].toString().isNotEmpty) {
+            String recognizedWords = parsed['text'].toString();
+            print("[VOSK DEBUG] Final result: $recognizedWords");
+
+            setState(()=>_recognizedText = recognizedWords);
+            
+            _executeCommand(recognizedWords);
+          }
+        } catch (e) {
+          print("[VOSK DEBUG] Cannot parse JSON: $e");
+        }
+      });
+
+      print('[VOSK DEBUG] Starting audio stream');
+      await _speechService?.start();
+      print('[VOSK DEBUG] Mic is successfully open');
+      
+    } catch (e) {
+      print("[VOSK DEBUG] Cannot start audio stream: $e");
+      setState(() => _isListening = false);
     }
-  } else {
-    setState(() => _isListening = false);
-    _speech.stop();
-  }
+  } 
 }
+  void _toggleMicButton() async {
+    print('[UX DEBUG] Pressed mic button');
+
+    if(_isListening){
+      print('[UX DEBUG] Mic is on. Shutting down...');
+      setState(() => _isListening = false);
+        
+    try {
+      await _speechService?.stop();
+    } catch (e) {
+      print('[UX DEBUG] Error stopping speechService: $e');
+    }
+    _speechService = null;
+    return;
+  }
+  print('[UX DEBUG] Mic is off. Starting up...');
+  _listen();
+  }
 
   void _executeCommand(String text) async {
     String t = text.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
@@ -251,18 +321,35 @@ void _listen() async {
     print("[PARSER DEBUG] Command: '$t' | Mode: $_selectedCommandMode");
 
     if (_selectedCommandMode == 'ok, styslo') {
-    if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
-      t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
-      print("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
-    } else {
-      print("[PARSER DEBUG] Ignored: without wakeword.");
-      return;
+      if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
+        t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
+        print("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
+        if (t.isEmpty){
+          print('[PARSER DEBUG] Empty command after wakeword.');
+          if (_fetchedText.isNotEmpty && _fetchedText != 'Loading news from source...'){
+            await _speak(_fetchedText);
+          } else {
+            await _loadLiveNews();
+          }
+        }
+      } else {
+        print("[PARSER DEBUG] Ignored: without wakeword.");
+        return;
+      }
     }
-  }
 
     if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
+      print('[PARSER DEBUG] Stop command recognized.');
       await _stop();
       return;
+    }
+
+    if (t.contains("читай") || t.contains("увімкни") || t.contains("запусти") || t.contains("play") || t.contains("старт")) {
+       print("[PARSER DEBUG] Play command recognized.");
+       if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source...") {
+         await _speak(_fetchedText);
+         t = t.replaceAll(RegExp(r'(читай|увімкни|запусти|play|старт)'), '').trim(); 
+       }
     }
 
     if (!_isConfigLoaded) {
@@ -315,14 +402,13 @@ void _listen() async {
       await _loadLiveNews();
     } else{
       print("[PARSER DEBUG] No changes to apply.");
-    }
-    
+  
       if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source..." && _fetchedText != "Can't connect. Check backend") {
         await _speak(_fetchedText);
       } else {
         print("[PARSER DEBUG] No text to speak. Current fetched text: '$_fetchedText'");
       }
-    
+    }
   }
 
   @override
@@ -346,14 +432,13 @@ void _listen() async {
                     initialCommandMode: _selectedCommandMode,
                     onCommandModeChanged: (newMode) {
                       setState(() => _selectedCommandMode = newMode);
-
                       if (newMode == 'ok, styslo') {
-                      print("[DEBUG] Main got Wake-word. Starting mic up...");
-                      Future.delayed(const Duration(milliseconds: 300), () {
-                        _listen(); 
+                        print("[DEBUG] Main got 'ok, styslo'. Starting mic up...");
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          _listen(); 
                       });
                     } else {
-                      print("[DEBUG] Exiting styslo, ok shutting down mic.");
+                      print("[DEBUG] Exiting 'ok, styslo',shutting down mic.");
                       _speech.stop();
                       setState(() => _isListening = false);
                     }
@@ -460,7 +545,7 @@ void _listen() async {
           //  VOICE (mic) ----
           if (_selectedCommandMode == 'voice') ...[
             GestureDetector(
-              onTap: _listen,
+              onTap: _toggleMicButton,
               child: CircleAvatar(
                 radius: 45,
                 backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
