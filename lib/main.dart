@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
@@ -45,7 +46,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   List<String> _dynamicCategories = ["General"]; 
   bool _isCategoriesLoading = true;
 
-// ----Server related----
+  // ----Server related----
   final String _apiBaseUrl = "http://192.168.1.101:8000/api";
   Map<String, dynamic> _remoteCategories = {};
   Map<String, dynamic> _remoteCompression = {};
@@ -53,22 +54,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   // ----Intent parser----
   bool _isListening = false;
+  bool _isIniatializing = false;
   String _recognizedText = 'waiting...';
-  String _selectedCommandMode = 'voice';
+  String _selectedCommandMode = 'button';
   final TextEditingController _commandController = TextEditingController();
   final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
   Model? _voskModel;
   Recognizer? _recognizer;
   SpeechService? _speechService;
   bool _isVoskReady = false;
+  StreamSubscription? _voskSubscription;
 
   // ----TTS Settings----
   String _selectedLanguage = "uk-UA";
   double _speechRate = 0.5;
   bool _isPlaying = false;
-  String _fetchedText = 'Waiting';
+  String _fetchedText =           "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
+                                  "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
+                                  "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. "
+                                  "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. ";
   int _currentWordOffset = 0;
   String _selectedCompression = "Compressed(only main thought)";
+
+  // ----Text ui ----
+  int _currentWordLength = 0;
 
   
   @override
@@ -88,6 +97,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     _flutterTts.setProgressHandler((String text, int startOffset, int endOffset, String word) {
       _currentWordOffset = startOffset;
+      _currentWordLength = endOffset;
     });
 
     _flutterTts.setStartHandler(() {
@@ -98,6 +108,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _isPlaying = false;
         _currentWordOffset = 0;
+        _currentWordLength = 0;
       });
     });
 
@@ -124,6 +135,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
 @override
 void dispose() {
   _commandController.dispose(); 
+  _voskSubscription?.cancel();
+  _speechService?.stop();
   super.dispose();
 }
 
@@ -208,118 +221,106 @@ Future<void> _fetchConfig() async {
     setState(() => _isPlaying = false);
   }
 
-void _listen() async {
-  print('[VOSK DEBUG] Received request to start up mic. Current status: _isListening=$_isListening');
-
-  if (_selectedCommandMode == 'text'){
-    print('[VOSK DEBUG] Shutting down mic');
-    setState(() => _isListening = false);
-    try{
-      await _speechService?.stop();
-    } catch(e){
-      print('[VOSK DEBUG] Error is shutting down mic: $e');
+  Future<void> _stopVosk() async {
+    print('[VOSK DEBUG] Forcing hard stop of Vosk SpeechService...');
+    
+    if (_voskSubscription != null) {
+      await _voskSubscription!.cancel();
+      _voskSubscription = null;
+      print('[VOSK DEBUG] Stream subscription successfully canceled.');
     }
-    _speechService = null;
+
+    if (_speechService != null) {
+      try {
+        await _speechService!.stop();
+        print('[VOSK DEBUG] Native speech service stopped.');
+      } catch (e) {
+        print('[VOSK DEBUG] Error while stopping speech service: $e');
+      }
+    }
+
+    setState(() => _isListening = false);
+
+    await Future.delayed(const Duration(milliseconds: 300));
+  }
+
+void _listen() async {
+  print('[VOSK DEBUG] Received request to START mic. Current status: _isListening=$_isListening');
+
+  if (_isIniatializing) {
+    print("[VOSK DEBUG] Already initializing, skipping start request");
     return;
   }
 
   if (_isListening) {
-    print('[VOSK DEBUG] Mic is already listening. User wants to turn it off...');
-    setState(() => _isListening = false);
-    try {
-      await _speechService?.stop();
-    } catch (e) {
-      print('[VOSK DEBUG] Error in stopping active mic: $e');
-    }
-    _speechService = null;
-    return; 
-  }
-
-  if (_speechService != null) {
-    print('[VOSK DEBUG] Found active SpeechService. Destroying ...');
-    try{
-      await _speechService?.stop();
-    } catch (e) {
-      print('[VOSK DEBUG] Error in stopping old SpeechService: $e');
-    }
-
-    _speechService = null;
-    _isListening = false;
-  }
-
-
-  if (!_isVoskReady || _recognizer == null){
-    print("[VOSK DEBUG] Vosk is not ready.");
-    setState(() => _isListening = false);
+    print("[VOSK DEBUG] Mic is already listening and service is active. Skipping.");
     return;
-  } 
+  }
 
-  if (!_isListening) {
-    if (_isPlaying && _selectedCommandMode != 'ok, styslo') {
-      await _stop();
+  setState(() => _isIniatializing = true);
+
+  try {
+
+    if (!_isVoskReady || _recognizer == null) {
+      print("[VOSK DEBUG] Vosk is not ready yet.");
+      return;
     }
 
+    if (_speechService == null) {
+      print('[VOSK DEBUG] SpeechService does not exist. Creating a NEW instance...');
+      _speechService = await _vosk.initSpeechService(_recognizer!);
+    } else {
+      print('[VOSK DEBUG] SpeechService ALREADY exists. Reusing it...');
+    }
+
+    if (_voskSubscription != null) {
+      print('[VOSK DEBUG] Destroying subscription');
+      await _voskSubscription!.cancel();
+    }
+
+
+    _voskSubscription = _speechService!.onResult().listen((jsonResult) {
+      try {
+        if (_selectedCommandMode == 'button') return;
+
+        final Map<String, dynamic> parsed = json.decode(jsonResult);
+        if (parsed.containsKey('text') && parsed['text'].toString().isNotEmpty) {
+          String recognizedWords = parsed['text'].toString();
+          print("[VOSK DEBUG] Final result: $recognizedWords");
+
+          setState(() => _recognizedText = recognizedWords);
+          _executeCommand(recognizedWords);
+        }
+      } catch (e) {
+        print("[VOSK DEBUG] Cannot parse JSON: $e");
+      }
+    });
+
+    print('[VOSK DEBUG] Starting audio stream...');
+    await _speechService!.start(); 
+    
     setState(() => _isListening = true);
 
-      try {
-      print('[VOSK DEBUG] Iniatializing SpeechService...');
-      _speechService = await _vosk.initSpeechService(_recognizer!);
+    print('[VOSK DEBUG] Mic is successfully open and active.');
 
-      _speechService?.onResult().listen((jsonResult) {
-        try {
-          final Map<String, dynamic> parsed = json.decode(jsonResult);
-
-          if (parsed.containsKey('partial') && parsed['partial'].toString().isNotEmpty) {
-            print("[VOSK DEBUG] Partial result: ${parsed['partial']}");
-          }
-
-          if (parsed.containsKey('text') && parsed['text'].toString().isNotEmpty) {
-            String recognizedWords = parsed['text'].toString();
-            print("[VOSK DEBUG] Final result: $recognizedWords");
-
-            setState(()=>_recognizedText = recognizedWords);
-            
-            _executeCommand(recognizedWords);
-          }
-        } catch (e) {
-          print("[VOSK DEBUG] Cannot parse JSON: $e");
-        }
-      });
-
-      print('[VOSK DEBUG] Starting audio stream');
-      await _speechService?.start();
-      print('[VOSK DEBUG] Mic is successfully open');
-      
-    } catch (e) {
+  } catch (e) {
       print("[VOSK DEBUG] Cannot start audio stream: $e");
       setState(() => _isListening = false);
-    }
-  } 
+  } finally {
+      setState(() => _isIniatializing = false);
+      print('[VOSK DEBUG] Initialization function finished.');
+  }
 }
-  void _toggleMicButton() async {
-    print('[UX DEBUG] Pressed mic button');
-
-    if(_isListening){
-      print('[UX DEBUG] Mic is on. Shutting down...');
-      setState(() => _isListening = false);
-        
-    try {
-      await _speechService?.stop();
-    } catch (e) {
-      print('[UX DEBUG] Error stopping speechService: $e');
-    }
-    _speechService = null;
-    return;
-  }
-  print('[UX DEBUG] Mic is off. Starting up...');
-  _listen();
-  }
 
   void _executeCommand(String text) async {
     String t = text.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
 
     print("[PARSER DEBUG] Command: '$t' | Mode: $_selectedCommandMode");
 
+    if (_selectedCommandMode == 'button'){
+      print('[PARSER DEBUG] In button mode, so shutting down parser');
+      return;
+    }
     if (_selectedCommandMode == 'ok, styslo') {
       if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
         t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
@@ -430,19 +431,16 @@ void _listen() async {
                     initialLanguage: _selectedLanguage,
                     initialSpeechRate: _speechRate,
                     initialCommandMode: _selectedCommandMode,
-                    onCommandModeChanged: (newMode) {
+                    onCommandModeChanged: (newMode) async {
                       setState(() => _selectedCommandMode = newMode);
-                      if (newMode == 'ok, styslo') {
-                        print("[DEBUG] Main got 'ok, styslo'. Starting mic up...");
-                        Future.delayed(const Duration(milliseconds: 300), () {
-                          _listen(); 
-                      });
+                     if (newMode == 'ok, styslo') {
+                        print("[DEBUG] Switched to 'ok, styslo'. Ensuring mic is fresh and starting...");
+                        _listen();
                     } else {
-                      print("[DEBUG] Exiting 'ok, styslo',shutting down mic.");
-                      _speech.stop();
-                      setState(() => _isListening = false);
-                    }
-                    },
+                        print("[DEBUG] Switched to '$newMode'. Turning off Vosk completely.");
+                        await _stopVosk();
+                      }
+  },
                     onLanguageChanged: (newLang) {
                       setState(() => _selectedLanguage = newLang);
                     },
@@ -485,159 +483,168 @@ void _listen() async {
               ),
               child: Column(
                 children: [
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _isPlaying = !_isPlaying;
-                      });
-
-                      if (_isPlaying) {
-                        _speak(_fetchedText);
-                      } else {
-                        _stop();
-                      }
-                    },
-                    child: CircleAvatar(
-                      radius: 45,
-                      backgroundColor: _isPlaying ? Colors.red : Colors.blueAccent,
-                      child: Icon(
-                        _isPlaying ? Icons.pause : Icons.play_arrow,
-                        size: 40,
-                        color: Colors.white,
-                      ),
-                    ),
+                  Text(
+                    "Lorem Ipsum",
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.5,
                   ),
-                  const SizedBox(height: 15),
-                  _isCategoriesLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : DropdownButton<String>(
-                          value: _currentChannel,
-                          dropdownColor: Colors.black,
-                          style: const TextStyle(color: Colors.white, fontSize: 16),
-                          icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
-                          items: _dynamicCategories.map<DropdownMenuItem<String>>((String value) {
-                            return DropdownMenuItem<String>(
-                              value: value,
-                              child: Text(value),
-                            );
-                          }).toList(),
-                          onChanged: (String? newValue) {
-                            if (newValue != null) {
-                              setState(() {
-                                _currentChannel = newValue;
-                              });
-                              _loadLiveNews();
-                            }
-                          },
-                        ),
-                  const SizedBox(height: 20),
-          Text(
-            "Listened: \"$_recognizedText\"",
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
-          ),
-          const SizedBox(height: 50),
-
-          //  VOICE (mic) ----
-          if (_selectedCommandMode == 'voice') ...[
-            GestureDetector(
-              onTap: _toggleMicButton,
-              child: CircleAvatar(
-                radius: 45,
-                backgroundColor: _isListening ? Colors.red : Colors.blueAccent,
-                child: Icon(
-                  _isListening ? Icons.mic : Icons.mic_none,
-                  size: 40,
-                  color: Colors.white,
-                ),
+                  textAlign: TextAlign.center,
               ),
-            ),
-            const SizedBox(height: 15),
-            Text(
-              _isListening ? "Listening..." : "Press me", 
-              style: const TextStyle(color: Colors.white54),
-            ),
-          ],
 
-          // ---- OK, STYSLO (background mode) ----
-          if (_selectedCommandMode == 'ok, styslo') ...[
-            const CircleAvatar(
-              radius: 45,
-              backgroundColor: Colors.teal,
-              child: Icon(
-                Icons.record_voice_over, 
-                size: 40,
-                color: Colors.white,
-              ),
-            ),
-            const SizedBox(height: 15),
-            const Text(
-              "Background mode: say  \"Okay, Styslo\"", 
-              style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold),
-            ),
-          ],
+              const SizedBox(height: 24),
 
-          // ----  TEXT ----
-          if (_selectedCommandMode == 'text')
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Container(
+                  Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: Colors.grey[900],
-                        borderRadius: BorderRadius.circular(30),
-                        border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+                        color: const Color(0xFF1E1E1E),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
                       ),
-                      child: TextField(
-                        controller: _commandController,
-                        style: const TextStyle(color: Colors.white),
-                        decoration: const InputDecoration(
-                          hintText: "Enter command (e.g., sports detailed)...",
-                          hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                          border: InputBorder.none,
+                      child: Column(
+                        children: [
+                          _fetchedText.isNotEmpty
+                              ? RichText(
+                                  text: TextSpan(
+                                    style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.6),
+                                    children: [
+                                      TextSpan(
+                                        text: _fetchedText.substring(0, _currentWordOffset.clamp(0, _fetchedText.length)),
+                                      ),
+
+                                      TextSpan(
+                                        text: _fetchedText.substring(_currentWordOffset.clamp(0, _fetchedText.length), _currentWordLength.clamp(0, _fetchedText.length)),
+                                        style: const TextStyle(
+                                          color: Colors.black,
+                                          backgroundColor: Colors.yellowAccent, 
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      TextSpan(
+                                        text: _fetchedText.substring(_currentWordLength.clamp(0, _fetchedText.length)),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : const Text(
+                                  "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
+                                  "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
+                                  "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. "
+                                  "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. ",
+                                  style: TextStyle(color: Colors.white70, fontSize: 15),
+                                ),
+                          
+                          const SizedBox(height: 20),
+
+              Container(
+                child: Column(
+                  children: [
+                    const SizedBox(height: 15),
+                      _isCategoriesLoading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : DropdownButton<String>(
+                              value: _currentChannel,
+                              dropdownColor: Colors.black,
+                              style: const TextStyle(color: Colors.white, fontSize: 16),
+                              icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
+                              items: _dynamicCategories.map<DropdownMenuItem<String>>((String value) {
+                                return DropdownMenuItem<String>(
+                                  value: value,
+                                  child: Text(value),
+                                );
+                              }).toList(),
+                              onChanged: (String? newValue) {
+                                if (newValue != null) {
+                                  setState(() {
+                                    _currentChannel = newValue;
+                                  });
+                                  _loadLiveNews();
+                                }
+                              },
+                            ),
+                            const SizedBox(height: 50),
+
+              
+                      // ---- OK, STYSLO (background mode) ----
+                      if (_selectedCommandMode == 'ok, styslo') ...[
+                        const Text(
+                          "\"Okay, Styslo\" is now active!", 
+                          style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold),
                         ),
-                        onSubmitted: (value) {
-                          if (value.trim().isNotEmpty) {
-                            _executeCommand(value);
-                            _commandController.clear();
-                          }
-                        },
-                      ),
+                      ],
+                    
+                      const SizedBox(height: 40),
+
+                    Text(
+                          "DEBUG Listened: \"$_recognizedText\"",
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
+                        ),
+                      const SizedBox(height: 40),
+
+                    Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min, 
+                        children: [
+                            IconButton(
+                                  iconSize: 36,
+                                  icon: const Icon(Icons.skip_previous, color: Colors.blueAccent),
+                                  onPressed: () {
+                                    print("[DEBUG UI] Skip backward pressed");
+                                  },
+                                ),
+                            const SizedBox(width: 24),
+                            GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _isPlaying = !_isPlaying;
+                                  });
+
+                                  if (_isPlaying) {
+                                    _speak(_fetchedText);
+                                  } else {
+                                    _stop();
+                                  }
+                                },
+                                child: CircleAvatar(
+                                  radius: 45,
+                                  backgroundColor: _isPlaying ? Colors.red : Colors.blueAccent,
+                                  child: Icon(
+                                    _isPlaying ? Icons.pause : Icons.play_arrow,
+                                    size: 40,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                                  const SizedBox(width: 20),
+                                  IconButton(
+                                      iconSize: 36,
+                                      icon: const Icon(Icons.skip_next, color: Colors.blueAccent),
+                                      onPressed: () {
+                                            print("[DEBUG UI] Skip forward pressed");
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ), 
+                        )
+                      ],
                     ),
                   ),
-
-                  const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: Colors.blueAccent,
-                    radius: 24,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
-                      onPressed: () {
-                        if (_commandController.text.trim().isNotEmpty) {
-                          _executeCommand(_commandController.text);
-                          _commandController.clear();
-                        }
-                      },
-                    ),
-                  ),
-                ],
+                ], 
               ),
             ),
-
-                  const SizedBox(height: 30),
-                ],
-              ),
-            ),
-          ]
-        )
+          ],
+        ),
       ),
-    ); 
-  }
+    );
+  } 
 } 

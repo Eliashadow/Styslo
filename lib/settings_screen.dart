@@ -28,7 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late String _selectedCommandMode;
   late double _speechRate;
   final List<String> _allowedLanguages = ["uk-UA", "en-US", "en-UK"];
-  final List<String> _allowedCommandModes = ['voice', 'text', 'ok, styslo'];
+  final List<String> _allowedCommandModes = ['button', 'ok, styslo'];
 
   @override
   void initState() {
@@ -134,8 +134,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   isExpanded: true,
                   items: _allowedCommandModes.map((String mode) {
                     String displayName = mode;
-                    if (mode == "voice") displayName = "Voice";
-                    if (mode == "text") displayName = "Text";
+                    if (mode == "button") displayName = "Button";
                     if (mode == 'ok, styslo') displayName = "Ok, Styslo";
                     return DropdownMenuItem<String>(value: mode, child: Text(displayName));
                   }).toList(),
