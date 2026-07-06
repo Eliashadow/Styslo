@@ -1,15 +1,34 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:vosk_flutter/vosk_flutter.dart';
+import 'package:logger/logger.dart';
 
+import 'audio_command_handler.dart';
 import 'sources_screen.dart';
 import 'settings_screen.dart';
 
-void main() {
+late AudioCommandHandler globalAudioHandler;
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (const bool.fromEnvironment('dart.vm.product')) {
+    Logger.level = Level.off; 
+  }
+
+  globalAudioHandler = await AudioService.init(
+    builder: () => AudioCommandHandler(),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId: 'com.styslo.channel.audio',
+      androidNotificationChannelName: 'Audio Command Service',
+      androidNotificationOngoing: true,
+      androidShowNotificationBadge: true, // Note: ensure this matches your API version
+    ),
+  );
   runApp(const StysloApp());
 }
 
@@ -38,8 +57,8 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  late stt.SpeechToText _speech;
   final FlutterTts _flutterTts = FlutterTts();
+  late AudioCommandHandler _audioHandler;
 
   // ----Categories----
   String _currentChannel = "General"; 
@@ -75,16 +94,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                   "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. ";
   int _currentWordOffset = 0;
   String _selectedCompression = "Compressed(only main thought)";
-
-  // ----Text ui ----
   int _currentWordLength = 0;
+  int _speakBaseOffset = 0;
 
-  
+
+  // ----Log----
+  final logger = Logger(
+  printer: PrettyPrinter(
+    methodCount: 0,       
+    errorMethodCount: 5,  
+    lineLength: 80,       
+    colors: true,         
+  ),
+);
+
   @override
   void initState() {
     super.initState();
-    _speech = stt.SpeechToText();
     _initVosk();
+    _initAudioService();
     _initTts();
     _fetchConfig();
     
@@ -95,9 +123,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await _flutterTts.setSpeechRate(_speechRate);
     await _flutterTts.setVolume(1.0);
 
-    _flutterTts.setProgressHandler((String text, int startOffset, int endOffset, String word) {
-      _currentWordOffset = startOffset;
-      _currentWordLength = endOffset;
+    _flutterTts.setProgressHandler(
+        (String text, int startOffset, int endOffset, String word) {
+      setState(() {
+        _currentWordOffset = _speakBaseOffset + startOffset;
+        _currentWordLength = _speakBaseOffset + endOffset;
+      });
     });
 
     _flutterTts.setStartHandler(() {
@@ -108,29 +139,58 @@ class _PlayerScreenState extends State<PlayerScreen> {
       setState(() {
         _isPlaying = false;
         _currentWordOffset = 0;
+        _speakBaseOffset = 0;
         _currentWordLength = 0;
       });
+      _audioHandler.updatePlaybackState(false);
     });
 
     _flutterTts.setErrorHandler((msg) {
       setState(() => _isPlaying = false);
-      print("Error TTS: $msg");
+      _audioHandler.updatePlaybackState(false);
+      logger.e("Error TTS: $msg");
     });
   }
 
   void _initVosk() async {
-    print("[VOSK DEBUG] Initializing Vosk model...");
+    logger.d("[VOSK DEBUG] Initializing Vosk model...");
     try{
       final modelPath = await ModelLoader().loadFromAssets('assets/models/uk.zip');
       _voskModel = await _vosk.createModel(modelPath);
       _recognizer = await _vosk.createRecognizer(model: _voskModel!, sampleRate: 16000);
 
       setState(() => _isVoskReady = true);
-      print("[VOSK DEBUG] Model initialized successfully.");
+      logger.d("[VOSK DEBUG] Model initialized successfully.");
     } catch (e) {
-      print("[VOSK DEBUG] Error initializing Vosk model: $e");
+      logger.d("[VOSK DEBUG] Error initializing Vosk model: $e");
     }
   }
+
+Future<void> _initAudioService() async {
+  _audioHandler = globalAudioHandler;
+  
+  final session = await AudioSession.instance;
+  await session.configure(const AudioSessionConfiguration.speech());
+  _audioHandler.onPauseTriggered = () async {
+    logger.i('[HEADSET DEBUG] Pause callback fired');
+    await _stop();
+  };
+
+  _audioHandler.onPlayTriggered = () async {
+    logger.i('[HEADSET DEBUG] Play callback fired');
+    await _speak(_fetchedText);
+  };
+
+  _audioHandler.onNextTriggered = () async {
+    logger.i('[HEADSET DEBUG] Skipping and moving to next');
+    await _switch();
+  };
+
+  _audioHandler.onPreviousTriggered = () async {
+    logger.i('[HEADSET DEBUG] Skipping and moving to previous');
+    await _switch();
+  };
+}
 
 @override
 void dispose() {
@@ -140,10 +200,10 @@ void dispose() {
   super.dispose();
 }
 
-  Future<void> _updateTtsSettings() async {
-    await _flutterTts.setLanguage(_selectedLanguage);
-    await _flutterTts.setSpeechRate(_speechRate);
-  }
+Future<void> _updateTtsSettings() async {
+  await _flutterTts.setLanguage(_selectedLanguage);
+  await _flutterTts.setSpeechRate(_speechRate);
+}
 
 Future<void> _fetchConfig() async {
   try {
@@ -165,12 +225,13 @@ Future<void> _fetchConfig() async {
       });
     }
   } catch (e) {
-    print("Error fetching remote config: $e");
+    logger.e("Error fetching remote config: $e");
   }
 }
 
   Future<void> _loadLiveNews() async {
     _currentWordOffset = 0;
+    _speakBaseOffset = 0; 
 
     setState(() {
       _fetchedText = "Loading news from source...";
@@ -207,53 +268,71 @@ Future<void> _fetchConfig() async {
 
   Future<void> _speak(String text) async {
     if (text.isEmpty) return;
+
+    final session = await AudioSession.instance;
+    await session.setActive(true);
+
+    globalAudioHandler.mediaItem.add(MediaItem(
+      id: 'styslo_tts_session',
+      album: 'Styslo Reader',
+      title: text.length > 30 ? '${text.substring(0, 30)}...' : text,
+      artist: _currentChannel,
+      duration: const Duration(hours: 1),
+    ));
+
+    _audioHandler.updatePlaybackState(true);
+
     await _updateTtsSettings();
 
     String textToSpeak = text;
+    _speakBaseOffset = 0;
     if (_currentWordOffset > 0 && _currentWordOffset < text.length) {
       textToSpeak = text.substring(_currentWordOffset);
+      _speakBaseOffset = _currentWordOffset;
     }
     await _flutterTts.speak(textToSpeak);
   }
 
+
   Future<void> _stop() async {
+    _audioHandler.updatePlaybackState(false);
     await _flutterTts.stop();
     setState(() => _isPlaying = false);
   }
 
   Future<void> _stopVosk() async {
-    print('[VOSK DEBUG] Forcing hard stop of Vosk SpeechService...');
+    logger.d('[VOSK DEBUG] Forcing hard stop of Vosk SpeechService...');
     
     if (_voskSubscription != null) {
       await _voskSubscription!.cancel();
       _voskSubscription = null;
-      print('[VOSK DEBUG] Stream subscription successfully canceled.');
+      logger.i('[VOSK DEBUG] Stream subscription successfully canceled.');
     }
 
     if (_speechService != null) {
       try {
         await _speechService!.stop();
-        print('[VOSK DEBUG] Native speech service stopped.');
+        logger.i('[VOSK DEBUG] Native speech service stopped.');
       } catch (e) {
-        print('[VOSK DEBUG] Error while stopping speech service: $e');
+        logger.e('[VOSK DEBUG] Error while stopping speech service: $e');
       }
     }
 
     setState(() => _isListening = false);
 
-    await Future.delayed(const Duration(milliseconds: 300));
+    await Future.delayed(const Duration(milliseconds: 200));
   }
 
-void _listen() async {
-  print('[VOSK DEBUG] Received request to START mic. Current status: _isListening=$_isListening');
+Future<void> _listen() async {
+  logger.d('[VOSK DEBUG] Received request to START mic. Current status: _isListening=$_isListening');
 
   if (_isIniatializing) {
-    print("[VOSK DEBUG] Already initializing, skipping start request");
+    logger.d("[VOSK DEBUG] Already initializing, skipping start request");
     return;
   }
 
   if (_isListening) {
-    print("[VOSK DEBUG] Mic is already listening and service is active. Skipping.");
+    logger.d("[VOSK DEBUG] Mic is already listening and service is active. Skipping.");
     return;
   }
 
@@ -262,19 +341,19 @@ void _listen() async {
   try {
 
     if (!_isVoskReady || _recognizer == null) {
-      print("[VOSK DEBUG] Vosk is not ready yet.");
+      logger.w("[VOSK DEBUG] Vosk is not ready yet.");
       return;
     }
 
     if (_speechService == null) {
-      print('[VOSK DEBUG] SpeechService does not exist. Creating a NEW instance...');
+      logger.d('[VOSK DEBUG] SpeechService does not exist. Creating a NEW instance...');
       _speechService = await _vosk.initSpeechService(_recognizer!);
     } else {
-      print('[VOSK DEBUG] SpeechService ALREADY exists. Reusing it...');
+      logger.d('[VOSK DEBUG] SpeechService ALREADY exists. Reusing it...');
     }
 
     if (_voskSubscription != null) {
-      print('[VOSK DEBUG] Destroying subscription');
+      logger.d('[VOSK DEBUG] Destroying subscription');
       await _voskSubscription!.cancel();
     }
 
@@ -286,47 +365,51 @@ void _listen() async {
         final Map<String, dynamic> parsed = json.decode(jsonResult);
         if (parsed.containsKey('text') && parsed['text'].toString().isNotEmpty) {
           String recognizedWords = parsed['text'].toString();
-          print("[VOSK DEBUG] Final result: $recognizedWords");
+          logger.i("[VOSK DEBUG] Final result: $recognizedWords");
 
           setState(() => _recognizedText = recognizedWords);
           _executeCommand(recognizedWords);
         }
       } catch (e) {
-        print("[VOSK DEBUG] Cannot parse JSON: $e");
+        logger.e("[VOSK DEBUG] Cannot parse JSON: $e");
       }
     });
 
-    print('[VOSK DEBUG] Starting audio stream...');
+    logger.i('[VOSK DEBUG] Starting audio stream...');
     await _speechService!.start(); 
     
     setState(() => _isListening = true);
 
-    print('[VOSK DEBUG] Mic is successfully open and active.');
+    logger.i('[VOSK DEBUG] Mic is successfully open and active.');
 
   } catch (e) {
-      print("[VOSK DEBUG] Cannot start audio stream: $e");
+      logger.e("[VOSK DEBUG] Cannot start audio stream: $e");
       setState(() => _isListening = false);
   } finally {
       setState(() => _isIniatializing = false);
-      print('[VOSK DEBUG] Initialization function finished.');
+      logger.i('[VOSK DEBUG] Initialization function finished.');
   }
+}
+
+Future<void> _switch() async {
+  logger.i('Sometime there will be something');
 }
 
   void _executeCommand(String text) async {
     String t = text.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
 
-    print("[PARSER DEBUG] Command: '$t' | Mode: $_selectedCommandMode");
+    logger.d("[PARSER DEBUG] Command: '$t' | Mode: $_selectedCommandMode");
 
     if (_selectedCommandMode == 'button'){
-      print('[PARSER DEBUG] In button mode, so shutting down parser');
+      logger.d('[PARSER DEBUG] In button mode, so shutting down parser');
       return;
     }
     if (_selectedCommandMode == 'ok, styslo') {
       if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
         t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
-        print("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
+        logger.i("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
         if (t.isEmpty){
-          print('[PARSER DEBUG] Empty command after wakeword.');
+          logger.d('[PARSER DEBUG] Empty command after wakeword.');
           if (_fetchedText.isNotEmpty && _fetchedText != 'Loading news from source...'){
             await _speak(_fetchedText);
           } else {
@@ -334,19 +417,19 @@ void _listen() async {
           }
         }
       } else {
-        print("[PARSER DEBUG] Ignored: without wakeword.");
+        logger.w("[PARSER DEBUG] Ignored: without wakeword.");
         return;
       }
     }
 
     if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
-      print('[PARSER DEBUG] Stop command recognized.');
+      logger.d('[PARSER DEBUG] Stop command recognized.');
       await _stop();
       return;
     }
 
     if (t.contains("читай") || t.contains("увімкни") || t.contains("запусти") || t.contains("play") || t.contains("старт")) {
-       print("[PARSER DEBUG] Play command recognized.");
+       logger.d("[PARSER DEBUG] Play command recognized.");
        if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source...") {
          await _speak(_fetchedText);
          t = t.replaceAll(RegExp(r'(читай|увімкни|запусти|play|старт)'), '').trim(); 
@@ -354,7 +437,7 @@ void _listen() async {
     }
 
     if (!_isConfigLoaded) {
-      print("[PARSER DEBUG] Error: Server config not loaded yet.");
+      logger.e("[PARSER DEBUG] Error: Server config not loaded yet.");
       return;
     } 
 
@@ -370,7 +453,7 @@ void _listen() async {
       for (var trigger in triggers) {
         if (t.contains(trigger.toString().toLowerCase())) {
           nextChannel = catName;
-          print("[PARSER DEBUG] Category matched: '$catName' for trigger '$trigger'");
+          logger.d("[PARSER DEBUG] Category matched: '$catName' for trigger '$trigger'");
           break categoryLoop;
         }
       }
@@ -384,7 +467,7 @@ void _listen() async {
       for (var trigger in triggers) {
         if (t.contains(trigger.toString().toLowerCase())) {
           nextCompression = compMode;
-          print("[PARSER DEBUG] Compression matched: '$compMode' for trigger '$trigger'");
+          logger.d("[PARSER DEBUG] Compression matched: '$compMode' for trigger '$trigger'");
           break compressionLoop;
         }
       }
@@ -395,19 +478,19 @@ void _listen() async {
     }
 
     if(isChanged){
-      print("[PARSER DEBUG] Changes detected. Applying new settings: Channel: '$nextChannel', Compression: '$nextCompression'");
+      logger.d("[PARSER DEBUG] Changes detected. Applying new settings: Channel: '$nextChannel', Compression: '$nextCompression'");
       setState(() {
       _currentChannel = nextChannel;
       _selectedCompression = nextCompression;
     }); 
       await _loadLiveNews();
     } else{
-      print("[PARSER DEBUG] No changes to apply.");
+      logger.d("[PARSER DEBUG] No changes to apply.");
   
       if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source..." && _fetchedText != "Can't connect. Check backend") {
         await _speak(_fetchedText);
       } else {
-        print("[PARSER DEBUG] No text to speak. Current fetched text: '$_fetchedText'");
+        logger.w("[PARSER DEBUG] No text to speak. Current fetched text: '$_fetchedText'");
       }
     }
   }
@@ -433,14 +516,21 @@ void _listen() async {
                     initialCommandMode: _selectedCommandMode,
                     onCommandModeChanged: (newMode) async {
                       setState(() => _selectedCommandMode = newMode);
-                     if (newMode == 'ok, styslo') {
-                        print("[DEBUG] Switched to 'ok, styslo'. Ensuring mic is fresh and starting...");
-                        _listen();
-                    } else {
-                        print("[DEBUG] Switched to '$newMode'. Turning off Vosk completely.");
-                        await _stopVosk();
-                      }
-  },
+                      await Future.microtask(() async {
+                        try {
+                        if (newMode == 'ok, styslo') {
+                            logger.i("[DEBUG] Switched to 'ok, styslo'. Ensuring mic is fresh and starting...");
+                            await _listen();
+                        } else {
+                            logger.i("[DEBUG] Switched to '$newMode'. Turning off Vosk completely.");
+                            await _stopVosk();
+                          }
+                        } catch (e){
+                          logger.e("[DEBUG] Error handling command mode change: $e");
+                        }
+                      });
+                    },
+                    
                     onLanguageChanged: (newLang) {
                       setState(() => _selectedLanguage = newLang);
                     },
@@ -479,7 +569,7 @@ void _listen() async {
               decoration: BoxDecoration(
                 color: const Color(0xFF1E1E1E),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
+                border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5)),
               ),
               child: Column(
                 children: [
@@ -502,7 +592,7 @@ void _listen() async {
                       decoration: BoxDecoration(
                         color: const Color(0xFF1E1E1E),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.blueAccent.withOpacity(0.3)),
+                        border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
                       ),
                       child: Column(
                         children: [
@@ -539,8 +629,7 @@ void _listen() async {
                           
                           const SizedBox(height: 20),
 
-              Container(
-                child: Column(
+              Column(
                   children: [
                     const SizedBox(height: 15),
                       _isCategoriesLoading
@@ -597,7 +686,7 @@ void _listen() async {
                                   iconSize: 36,
                                   icon: const Icon(Icons.skip_previous, color: Colors.blueAccent),
                                   onPressed: () {
-                                    print("[DEBUG UI] Skip backward pressed");
+                                    logger.d("[DEBUG UI] Skip backward pressed");
                                   },
                                 ),
                             const SizedBox(width: 24),
@@ -628,14 +717,13 @@ void _listen() async {
                                       iconSize: 36,
                                       icon: const Icon(Icons.skip_next, color: Colors.blueAccent),
                                       onPressed: () {
-                                            print("[DEBUG UI] Skip forward pressed");
+                                            logger.d("[DEBUG UI] Skip forward pressed");
                                     },
                                   ),
                                 ],
                               ),
                             ],
                           ), 
-                        )
                       ],
                     ),
                   ),
