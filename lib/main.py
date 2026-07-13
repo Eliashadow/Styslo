@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 import ollama 
 from sqlalchemy.orm import Session
-from database import get_db, Category, Source, Article, Digest, SessionLocal, init_db
+from database import (get_db, Category, Source, Article, Digest, DigestArticle, SessionLocal, init_db)
 from sqlalchemy import func
 from parser import parse_rss_sources
 
@@ -145,50 +145,103 @@ async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
     }  
 
 @app.post("/api/news")
-async def get_news(request: Request, db: Session = Depends(get_db)):
-    try:
-        data = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON format")
-        
-    print(f"\n[DEBUG] Given data by Flutter: {data}\n")
+async def get_news(request: NewsRequest, db: Session = Depends(get_db)):
+    incoming_category = request.category.strip()
+    req_compression = request.compression
 
-    req_category = data.get("category", "General")
-    req_compression = data.get("compression", "Compressed(only main thought)")
-    incoming_category = str(req_category).strip()
-    
-    category = None
-    all_categories = db.query(Category).all()
-    for cat in all_categories:
-        if incoming_category.lower() in cat.name.lower() or cat.name.lower() in incoming_category.lower():
-            category = cat
-            break
-            
+    category = db.query(Category).filter(
+        func.lower(Category.name) == func.lower(incoming_category)
+    ).first()
+
     if not category:
-        print(f"[DB] Category '{incoming_category}' not found. Creating on the fly...")
-        category = Category(name=incoming_category)
-        db.add(category)
-        db.commit()
-        db.refresh(category)
-        return {"title": category.name, "content": f"Created new category '{category.name}'. Add RSS sources."}
+        raise HTTPException(
+            status_code=404,
+            detail=f"Category '{incoming_category}' not found."
+        )
 
-    source_ids = [source.id for source in category.sources if source.is_active]
+    sources = db.query(Source).filter(
+        Source.category_id == category.id,
+        Source.is_active.is_(True)
+    ).all()
+
+    source_ids = [source.id for source in sources]
+
     if not source_ids:
-        return {"title": category.name, "content": "No active sources in this category."}
+        return {
+            "title": category.name,
+            "content": "No active sources in this category."
+        }
 
-    latest_articles = db.query(Article).filter(Article.source_id.in_(source_ids)).order_by(Article.published_at.desc()).limit(3).all()
+    latest_articles = db.query(Article).filter(
+        Article.source_id.in_(source_ids)
+    ).order_by(
+        Article.published_at.desc(),
+        Article.id.desc()
+    ).limit(3).all()
 
     if not latest_articles:
-        return {"title": category.name, "content": "No news available in the database. Please wait for the background parser to update."}
+        return {
+            "title": category.name,
+            "content": "No news available in the database. Run parser.py or wait for the scheduler."
+        }
 
-    main_title = latest_articles[0].title
-    combined_news_text = "\n\n".join([f"Новина: {a.title}. {a.raw_text or ''}" for a in latest_articles])
-    final_content = await summarize_news(combined_news_text, req_compression)
+    combined_news_text = "\n\n".join(
+        [
+            f"Новина {position}: {article.title}\n{article.raw_text}"
+            for position, article in enumerate(latest_articles, start=1)
+        ]
+    )
+
+    final_content = await summarize_news(
+        combined_news_text,
+        req_compression
+    )
+
+    new_digest = Digest(
+        category_id=category.id,
+        compression_level=req_compression,
+        summary_text=final_content
+    )
+
+    try:
+        db.add(new_digest)
+        db.flush()
+        
+        for position, article in enumerate(latest_articles, start=1):
+            digest_article = DigestArticle(
+                digest_id=new_digest.id,
+                article_id=article.id,
+                position=position
+            )
+
+            db.add(digest_article)
+
+        db.commit()
+
+        db.refresh(new_digest)
+
+    except Exception as error:
+        db.rollback()
+        print(f"[DB] Cannot save digest: {error}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Digest was generated but could not be saved to database."
+        )
 
     return {
-        "title": main_title,
+        "digest_id": new_digest.id,
+        "title": latest_articles[0].title,
         "content": final_content,
-        "category": category.name
+        "category": category.name,
+        "used_articles": [
+            {
+                "id": article.id,
+                "title": article.title,
+                "url": article.source_url
+            }
+            for article in latest_articles
+        ]
     }
 
 @app.get("/api/sources")
