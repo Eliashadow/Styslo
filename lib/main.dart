@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:vosk_flutter/vosk_flutter.dart';
 import 'package:logger/logger.dart';
@@ -26,7 +26,7 @@ Future<void> main() async {
       androidNotificationChannelId: 'com.styslo.channel.audio',
       androidNotificationChannelName: 'Audio Command Service',
       androidNotificationOngoing: true,
-      androidShowNotificationBadge: true, // Note: ensure this matches your API version
+      androidShowNotificationBadge: true, 
     ),
   );
   runApp(const StysloApp());
@@ -57,7 +57,7 @@ class PlayerScreen extends StatefulWidget {
 }
 
 class _PlayerScreenState extends State<PlayerScreen> {
-  final FlutterTts _flutterTts = FlutterTts();
+  final AudioPlayer _audioPlayer = AudioPlayer();
   late AudioCommandHandler _audioHandler;
 
   // ----Categories----
@@ -66,7 +66,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isCategoriesLoading = true;
 
   // ----Server related----
-  final String _apiBaseUrl = "http://192.168.1.101:8000/api";
+  final String _apiBaseUrl = "http://192.168.1.126:8000/api";
   Map<String, dynamic> _remoteCategories = {};
   Map<String, dynamic> _remoteCompression = {};
   bool _isConfigLoaded = false;
@@ -84,19 +84,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isVoskReady = false;
   StreamSubscription? _voskSubscription;
 
-  // ----TTS Settings----
+  // ----Audio Player Settings----
+  String _currentTitle = 'Lorem Ipsum';
   String _selectedLanguage = "uk-UA";
   double _speechRate = 0.5;
   bool _isPlaying = false;
-  String _fetchedText =           "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
-                                  "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
-                                  "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. "
-                                  "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. ";
-  int _currentWordOffset = 0;
   String _selectedCompression = "Compressed(only main thought)";
-  int _currentWordLength = 0;
-  int _speakBaseOffset = 0;
-
+  List<Map<String, dynamic>> _wordTimings = [];
+  int _currentlyHighlightedIndex = -1;
+  String _audioUrl = '';
 
   // ----Log----
   final logger = Logger(
@@ -111,51 +107,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
-    _initVosk();
+    _initVosk();  
     _initAudioService();
-    _initTts();
+    _initAudioPlayer();
     _fetchConfig();
     
   }
 
-  void _initTts() async {
-    await _flutterTts.setLanguage(_selectedLanguage);
-    await _flutterTts.setSpeechRate(_speechRate);
-    await _flutterTts.setVolume(1.0);
+  void _initAudioPlayer() async {
+  _audioPlayer.positionStream.listen((position) {
+    int milliseconds = position.inMilliseconds;
+    double currentSeconds = milliseconds / 1000.0;
 
-    _flutterTts.setProgressHandler(
-        (String text, int startOffset, int endOffset, String word) {
-      setState(() {
-        _currentWordOffset = _speakBaseOffset + startOffset;
-        _currentWordLength = _speakBaseOffset + endOffset;
+    int newIndex = _wordTimings.indexWhere((timing) {
+      double start = timing['Start']; 
+      double end = timing['End'];
+
+      return currentSeconds >= start && currentSeconds <= end; 
+  });
+
+  if (newIndex != -1 && newIndex != _currentlyHighlightedIndex) {
+    setState(() {
+      _currentlyHighlightedIndex = newIndex;
       });
-    });
-
-    _flutterTts.setStartHandler(() {
-      setState(() => _isPlaying = true);
-    });
-
-    _flutterTts.setCompletionHandler(() {
-      setState(() {
-        _isPlaying = false;
-        _currentWordOffset = 0;
-        _speakBaseOffset = 0;
-        _currentWordLength = 0;
-      });
-      _audioHandler.updatePlaybackState(false);
-    });
-
-    _flutterTts.setErrorHandler((msg) {
-      setState(() => _isPlaying = false);
-      _audioHandler.updatePlaybackState(false);
-      logger.e("Error TTS: $msg");
-    });
-  }
+    }
+  });
+}
 
   void _initVosk() async {
     logger.d("[VOSK DEBUG] Initializing Vosk model...");
     try{
-      final modelPath = await ModelLoader().loadFromAssets('assets/models/uk.zip');
+      final modelPath = await ModelLoader().loadFromAssets('assets/models/voice/uk.zip');
       _voskModel = await _vosk.createModel(modelPath);
       _recognizer = await _vosk.createRecognizer(model: _voskModel!, sampleRate: 16000);
 
@@ -168,41 +150,43 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 Future<void> _initAudioService() async {
   _audioHandler = globalAudioHandler;
-  
+
   final session = await AudioSession.instance;
+  await session.setActive(true);
   await session.configure(const AudioSessionConfiguration.speech());
+
   _audioHandler.onPauseTriggered = () async {
+    logger.i('[HEADSET DEBUG] Playing status in init: $_isPlaying');
     logger.i('[HEADSET DEBUG] Pause callback fired');
     await _stop();
   };
 
   _audioHandler.onPlayTriggered = () async {
+    logger.i('[HEADSET DEBUG] Playing status in init: $_isPlaying ');
     logger.i('[HEADSET DEBUG] Play callback fired');
-    await _speak(_fetchedText);
+    await _speak(_audioUrl);
   };
 
   _audioHandler.onNextTriggered = () async {
-    logger.i('[HEADSET DEBUG] Skipping and moving to next');
     await _switch();
   };
 
   _audioHandler.onPreviousTriggered = () async {
-    logger.i('[HEADSET DEBUG] Skipping and moving to previous');
     await _switch();
   };
 }
 
 @override
 void dispose() {
+  _audioHandler.onPlayTriggered = null;
+  _audioHandler.onPauseTriggered = null;
+  _audioHandler.onNextTriggered = null;
+  _audioHandler.onPreviousTriggered = null;
+
   _commandController.dispose(); 
   _voskSubscription?.cancel();
   _speechService?.stop();
   super.dispose();
-}
-
-Future<void> _updateTtsSettings() async {
-  await _flutterTts.setLanguage(_selectedLanguage);
-  await _flutterTts.setSpeechRate(_speechRate);
 }
 
 Future<void> _fetchConfig() async {
@@ -230,12 +214,7 @@ Future<void> _fetchConfig() async {
 }
 
   Future<void> _loadLiveNews() async {
-    _currentWordOffset = 0;
-    _speakBaseOffset = 0; 
-
-    setState(() {
-      _fetchedText = "Loading news from source...";
-    });
+    List<dynamic>? fetchedTimings;
 
     try {
       final String backendUrl = "$_apiBaseUrl/news";
@@ -246,58 +225,77 @@ Future<void> _fetchConfig() async {
         body: jsonEncode({
           "category": _currentChannel,
           "compression": _selectedCompression, 
+          "language": _selectedLanguage,  
+          "speech_rate": _speechRate,
+          'title': _currentTitle,
         }),
       );
-
+   
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
+
+        _audioUrl = (data['audio_url'] as String).trim();
+        fetchedTimings = data['timings'];
         setState(() {
-          _fetchedText = data["content"] ?? "Text is None";
+          _wordTimings = List<Map<String, dynamic>>.from(fetchedTimings!);
         });
+        logger.i('Fetched timings: $_wordTimings');
       } else {
-        setState(() => _fetchedText = "Server error: ${response.statusCode}");
+        logger.e("Server error: ${response.statusCode}");
       }
     } catch (e) {
-      setState(() => _fetchedText = "Can't connect. Check backend");
+      logger.e("Can't connect. Check backend");
     }
 
     if (_isPlaying) {
-      _speak(_fetchedText);
+      _speak(_audioUrl);
     }
   }
 
-  Future<void> _speak(String text) async {
-    if (text.isEmpty) return;
+  Future<void> _speak(String url) async {
+    _audioUrl = url;
+    if (_audioUrl == ''){
+      await _loadLiveNews();
+      if (_audioUrl == '') return;
+    } 
 
     final session = await AudioSession.instance;
-    await session.setActive(true);
+    if (!(await session.setActive(true))) return;
 
     globalAudioHandler.mediaItem.add(MediaItem(
-      id: 'styslo_tts_session',
-      album: 'Styslo Reader',
-      title: text.length > 30 ? '${text.substring(0, 30)}...' : text,
+      id: _audioUrl,
+      album: _currentChannel,
+      title: _currentTitle,
       artist: _currentChannel,
       duration: const Duration(hours: 1),
     ));
 
-    _audioHandler.updatePlaybackState(true);
+    _audioUrl = 'https://commondatastorage.googleapis.com/codeskulptor-assets/Epoq-Lepidoptera.ogg';
+    logger.i('Attempting to play URL: $_audioUrl');
+    try {
+      await _audioPlayer.setUrl(_audioUrl,).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception("Connection to server timed out"),
+      );
 
-    await _updateTtsSettings();
+      await _audioPlayer.play();
 
-    String textToSpeak = text;
-    _speakBaseOffset = 0;
-    if (_currentWordOffset > 0 && _currentWordOffset < text.length) {
-      textToSpeak = text.substring(_currentWordOffset);
-      _speakBaseOffset = _currentWordOffset;
+      _audioHandler.updatePlaybackState(true);
+
+      setState(() => _isPlaying = true);
+      logger.i('Playing status in _speak: $_isPlaying');
+
+    } catch (e) {
+      logger.e("Real error with URL $_audioUrl: $e");
     }
-    await _flutterTts.speak(textToSpeak);
-  }
-
+}
 
   Future<void> _stop() async {
-    _audioHandler.updatePlaybackState(false);
-    await _flutterTts.stop();
-    setState(() => _isPlaying = false);
+      await _audioPlayer.stop();
+      _audioHandler.updatePlaybackState(false);
+      setState(() => _isPlaying = false);
+      logger.i('[HEADSET DEBUG] Playing status in _stop: $_isPlaying');
+
   }
 
   Future<void> _stopVosk() async {
@@ -410,8 +408,8 @@ Future<void> _switch() async {
         logger.i("[PARSER DEBUG] Wakeword found. Cleaned command: '$t'");
         if (t.isEmpty){
           logger.d('[PARSER DEBUG] Empty command after wakeword.');
-          if (_fetchedText.isNotEmpty && _fetchedText != 'Loading news from source...'){
-            await _speak(_fetchedText);
+          if (_audioUrl != ''){
+            await _speak(_audioUrl);
           } else {
             await _loadLiveNews();
           }
@@ -430,8 +428,8 @@ Future<void> _switch() async {
 
     if (t.contains("читай") || t.contains("увімкни") || t.contains("запусти") || t.contains("play") || t.contains("старт")) {
        logger.d("[PARSER DEBUG] Play command recognized.");
-       if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source...") {
-         await _speak(_fetchedText);
+       if (_audioUrl != '') {
+         await _speak(_audioUrl);
          t = t.replaceAll(RegExp(r'(читай|увімкни|запусти|play|старт)'), '').trim(); 
        }
     }
@@ -487,10 +485,10 @@ Future<void> _switch() async {
     } else{
       logger.d("[PARSER DEBUG] No changes to apply.");
   
-      if (_fetchedText.isNotEmpty && _fetchedText != "Loading news from source..." && _fetchedText != "Can't connect. Check backend") {
-        await _speak(_fetchedText);
+      if (_audioUrl != '') {
+        await _speak(_audioUrl);
       } else {
-        logger.w("[PARSER DEBUG] No text to speak. Current fetched text: '$_fetchedText'");
+        logger.w("[PARSER DEBUG] No without _audioUrl.");
       }
     }
   }
@@ -534,9 +532,9 @@ Future<void> _switch() async {
                     onLanguageChanged: (newLang) {
                       setState(() => _selectedLanguage = newLang);
                     },
-                    onSpeechRateChanged: (newRate) {
+                    onSpeechRateChanged: (newRate) async {
                       setState(() => _speechRate = newRate);
-                      _updateTtsSettings();
+                      await _loadLiveNews();
                     },
                     
                   ),
@@ -574,7 +572,7 @@ Future<void> _switch() async {
               child: Column(
                 children: [
                   Text(
-                    "Lorem Ipsum",
+                    "$_currentTitle ",
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 26,
@@ -596,27 +594,22 @@ Future<void> _switch() async {
                       ),
                       child: Column(
                         children: [
-                          _fetchedText.isNotEmpty
+                          _wordTimings.isNotEmpty
                               ? RichText(
                                   text: TextSpan(
                                     style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.6),
-                                    children: [
-                                      TextSpan(
-                                        text: _fetchedText.substring(0, _currentWordOffset.clamp(0, _fetchedText.length)),
-                                      ),
+                                    children: _wordTimings.asMap().entries.map((entry) {
+                                      int index = entry.key;
+                                      String word = entry.value['Word'] ?? 'Unknown';
+                                      bool isHighlighted = index == _currentlyHighlightedIndex;
 
-                                      TextSpan(
-                                        text: _fetchedText.substring(_currentWordOffset.clamp(0, _fetchedText.length), _currentWordLength.clamp(0, _fetchedText.length)),
-                                        style: const TextStyle(
-                                          color: Colors.black,
-                                          backgroundColor: Colors.yellowAccent, 
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      TextSpan(
-                                        text: _fetchedText.substring(_currentWordLength.clamp(0, _fetchedText.length)),
-                                      ),
-                                    ],
+                                      return TextSpan(
+                                        text: "$word " ,
+                                        style: isHighlighted
+                                          ? const TextStyle(color: Colors.black, backgroundColor: Colors.yellowAccent)
+                                          : const TextStyle(color: Colors.white)
+                                      );
+                                    }).toList(),
                                   ),
                                 )
                               : const Text(
@@ -697,7 +690,7 @@ Future<void> _switch() async {
                                   });
 
                                   if (_isPlaying) {
-                                    _speak(_fetchedText);
+                                    _speak(_audioUrl);
                                   } else {
                                     _stop();
                                   }

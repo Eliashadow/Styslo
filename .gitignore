@@ -1,4 +1,3 @@
-/.dart_tool/
 /build/
 /.idea/
 /.vscode/
@@ -10,8 +9,12 @@ __pycache__/
 /macos/
 /linux/
 /windows/
-assets/models/uk.zip
 .gradle/
 android/.gradle/
 android/app/build/
 *.html
+storage/
+assets/models/tts
+assets/models/voice
+assets/ffmpeg
+bin/

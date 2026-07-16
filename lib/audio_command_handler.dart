@@ -48,21 +48,30 @@ class AudioCommandHandler extends BaseAudioHandler with SeekHandler {
 
 Future<void> _activateAudioService() async {
   final session = await AudioSession.instance;
+  await session.setActive(true);
+
   await session.configure(const AudioSessionConfiguration(
     avAudioSessionCategory: AVAudioSessionCategory.playback,
     avAudioSessionCategoryOptions: AVAudioSessionCategoryOptions.duckOthers,
     androidAudioAttributes: AndroidAudioAttributes(
-      contentType: AndroidAudioContentType.speech, // Tells Android this is speech
-      usage: AndroidAudioUsage.media,              // Tells Android to treat it like media for button routing
+      contentType: AndroidAudioContentType.speech, 
+      usage: AndroidAudioUsage.media,              
     ),
     androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
   ));
+  await session.setActive(true);
 
   session.becomingNoisyEventStream.listen((_) {
     logger.i('[HEADSET DEBUG] Becoming noisy event: Pausing audio');
     pause(); 
   });
 
+  session.interruptionEventStream.listen((event) {
+    if (event.begin) {
+      logger.i('[HEADSET DEBUG] Something happened(mostly cause of incoming call), so stopping');
+      pause();
+    }
+  });
   bool success = await session.setActive(true);
   if (!success) {
     logger.e("[AUDIO DEBUG] Failed to gain audio focus!");
@@ -71,6 +80,7 @@ Future<void> _activateAudioService() async {
 }
 
   void updatePlaybackState(bool isPlaying) {
+    logger.i('[HEADSET DEBUG] Playing status in updatePlaybackState: $isPlaying');
     playbackState.add(playbackState.value.copyWith(
       playing: isPlaying,
       controls: [
@@ -78,45 +88,26 @@ Future<void> _activateAudioService() async {
         isPlaying ? MediaControl.pause : MediaControl.play,
         MediaControl.skipToNext,
       ],
-      processingState: AudioProcessingState.ready,
-
-
+      systemActions: {
+        MediaAction.play,
+        MediaAction.pause,
+        MediaAction.skipToNext,
+        MediaAction.skipToPrevious,
+        MediaAction.seek,
+    },
+      processingState:  AudioProcessingState.ready,
     ));
-  }
-
-  // 1. ADD THIS OVERRIDE: This intercepts the physical headphone button click!
-  @override
-  Future<void> click([MediaButton button = MediaButton.media]) async {
-    logger.d('[HEADSET DEBUG] Button pressed: $button');
-    switch (button) {
-      case MediaButton.media:
-        // If it's a standard single-button click, toggle the state
-        if (playbackState.value.playing) {
-          await pause();
-        } else {
-          await play();
-        }
-        break;
-      case MediaButton.next:
-        await skipToNext();
-        break;
-      case MediaButton.previous:
-        await skipToPrevious();
-        break;
-    }
-    await super.click(button);
   }
 
   @override
   Future<void> play() async {
-    updatePlaybackState(true);
+    logger.i('[DEBUG] AudioHandler.play() received!');
     if (onPlayTriggered != null) onPlayTriggered!();
   }
 
   @override
   Future<void> pause() async {
-    // 3. Update the state so the OS knows we are paused
-    updatePlaybackState(false);
+    logger.i('[DEBUG] AudioHandler.pause() received!');
     if (onPauseTriggered != null) onPauseTriggered!();
   }
 

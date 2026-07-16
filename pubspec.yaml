@@ -34,7 +34,6 @@ dependencies:
   just_audio: ^0.9.44
   audio_service: ^0.18.12   
   audio_session: ^0.1.21    
-  flutter_tts: ^4.2.5
   rxdart: ^0.28.0
 
   http: ^1.2.0
@@ -70,7 +69,7 @@ flutter:
 
 
   assets:
-    - assets/models/uk.zip
+    - assets/models/voice/uk.zip
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
