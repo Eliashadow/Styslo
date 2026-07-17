@@ -45,10 +45,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-audio_dir = Path("storage/audio")
+audio_dir = Path(r"C:\Styslo\storage\audio").resolve()
 audio_dir.mkdir(parents=True, exist_ok=True)
 
-app.mount("/audio", StaticFiles(directory=r"C:\Styslo\storage\audio"), name="audio")
+app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
 version = 'test'
 piper_exe = r"C:\Styslo\bin\piper\piper.exe"
@@ -114,7 +114,7 @@ async def generate_speech(text, lang, rate, output_path):
     cleaned = clean_text(text)
     with Timer(l, 'generating speech'):
         try:
-            if os.path.exists('storage/audio'):
+            if os.path.exists(r"C:\Styslo\storage\audio"):
                 l.debug('Checking piper.exe ...')
                 l.debug(f'Does it exists? {os.path.exists(piper_exe)}')
 
@@ -265,7 +265,10 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             
             if not temp_wav_path:
                 raise HTTPException(status_code=500, detail='Speech/aligment generation failed')
-
+            
+            l.debug(f'Checking file at {temp_wav_path}...')
+            l.debug(f'Does file exist? {os.path.exists(temp_wav_path)}')
+            
             # file_name = f"{uuid.uuid4()}.wav"
             # final_mp3_path = os.path.join("storage/audio", file_name)
 

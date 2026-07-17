@@ -270,7 +270,6 @@ Future<void> _fetchConfig() async {
       duration: const Duration(hours: 1),
     ));
 
-    _audioUrl = 'https://commondatastorage.googleapis.com/codeskulptor-assets/Epoq-Lepidoptera.ogg';
     logger.i('Attempting to play URL: $_audioUrl');
     try {
       await _audioPlayer.setUrl(_audioUrl,).timeout(
