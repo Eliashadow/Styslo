@@ -24,7 +24,7 @@ class Source(Base):
     id = Column(Integer, primary_key=True, index=True)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=False)
     name = Column(String, nullable=False)
-    source_type = Column(String, nullable=False)  # "rss", "telegram", "api" in future
+    source_type = Column(String, nullable=False)
     url_or_credentials = Column(String, nullable=False)  
     is_active = Column(Boolean, default=True)
     

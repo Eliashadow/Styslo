@@ -18,3 +18,4 @@ assets/models/tts
 assets/models/voice
 assets/ffmpeg
 bin/
+*.session
