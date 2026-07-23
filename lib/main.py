@@ -23,7 +23,7 @@ from logger import Logger, Timer, LogLevel
 async def lifespan(app: FastAPI):
     init_db()
     l.info("Data base initialized successfully")
-    seconds = 60
+    seconds = 600
     scheduler.add_job(run_background_parser, 'interval', seconds=seconds, id='news_parser_job')
     scheduler.start()
     l.info(f"[FastAPI] Background scheduler started (test interval: {seconds} seconds).")
