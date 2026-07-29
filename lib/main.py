@@ -14,7 +14,7 @@ import uuid
 import os 
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import get_db, Category, Source, Article, Digest, SessionLocal, init_db
+from database import (get_db, Category, Source, Article, Digest, DigestArticle, SessionLocal, init_db)
 from sqlalchemy import func
 from parser import parse_rss_sources, parse_telegram_sources, parse_api_sources
 from logger import Logger, Timer, LogLevel
@@ -285,15 +285,27 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             
             audio_url = f"{fastapi_req.base_url}audio/{file_name}"
             l.debug(f'Created audio url: {audio_url} \n Number of characters {len(audio_url)} \n Number of characters with trim {len(audio_url.strip())}')
-            new_article = Article(
+            new_digest = Digest(
+                category_id=category.id,
+                compression_level=req_compression,
                 title = main_title,
                 source_id = 1,
-                raw_text=final_content,
+                summary_text=final_content,
+                timing=timings,
                 audio_url=audio_url 
             )
-            db.add(new_article)
-            db.commit()
-            l.info('[DB] Added new article.')
+            try:
+                db.add(new_digest)
+                db.commit()
+                l.info('[DB] Added new digest.')
+            except Exception as e:
+                db.rollback()
+                l.error(f'[DB] Cannot save digest: {e}')
+
+                raise HTTPException(
+                status_code=500,
+                detail="Digest was generated but could not be saved to database."
+            )
 
             return {
                 "title": main_title,
@@ -301,8 +313,17 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
                 "audio_url": audio_url,
                 "timings": timings, 
                 "category": category.name,
-                "status": "success"
+                "status": "success",
+                "digest_id": new_digest.id,
+                "used_articles": [
+            {
+                "id": article.id,
+                "title": article.title,
+                "url": article.source_url
             }
+            for article in latest_articles
+        ]
+    }
         except ValidationError as e:
             l.error(f'Validation error {e.json()}')
             raise HTTPException(status_code=500, detail=e.errors())
