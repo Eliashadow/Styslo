@@ -5,15 +5,20 @@ class SettingsScreen extends StatefulWidget {
   final ValueChanged<String> onLanguageChanged;
   final double initialSpeechRate;
   final ValueChanged<double> onSpeechRateChanged;
+  final String initialCommandMode;
+  final ValueChanged<String> onCommandModeChanged;
 
   const SettingsScreen({
-    Key? key,
+    super.key,
+
     required this.initialLanguage,
     required this.initialSpeechRate,
     required this.onLanguageChanged,
     required this.onSpeechRateChanged,
+    required this.initialCommandMode,
+    required this.onCommandModeChanged,
 
-  }) : super(key: key);
+  });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -21,13 +26,16 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   late String _selectedLanguage;
+  late String _selectedCommandMode;
   late double _speechRate;
+
   final List<String> _allowedLanguages = ["uk-UA", "en-US", "en-UK"];
 
   @override
   void initState() {
     super.initState();
     _selectedLanguage = widget.initialLanguage;
+    _selectedCommandMode = widget.initialCommandMode;
     _speechRate = widget.initialSpeechRate;
   }
 
@@ -56,7 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               decoration: BoxDecoration(
                 color: Colors.grey[900],
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blueAccent.withOpacity(0.5)),
+                border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5)),
               ),
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
@@ -101,8 +109,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 widget.onSpeechRateChanged(value); 
               },
             ),
-          ],
-        ),
+
+            const SizedBox(height: 30), 
+            
+            Card(
+              color: Colors.grey[900],
+              margin: EdgeInsets.zero, 
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(color: Colors.blueAccent.withValues(alpha: 0.5)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: SwitchListTile(
+                  title: const Text(
+                    "Mode \"Ok, Styslo\"",
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                  subtitle: Text(
+                    _selectedCommandMode == 'ok, styslo' ? "Voice activation" : "Button control",
+                    style: TextStyle(
+                      color: _selectedCommandMode == 'ok, styslo' ? Colors.blueAccent : Colors.grey,
+                      fontSize: 13,
+                    ),
+                  ),
+                  secondary: Icon(
+                    Icons.mic,
+                    color: _selectedCommandMode == 'ok, styslo' ? Colors.blueAccent : Colors.grey,
+                  ),
+                  activeThumbColor: Colors.blueAccent,
+                  activeTrackColor: Colors.blue.withValues(alpha: 0.3),
+                  inactiveThumbColor: Colors.grey[400],
+                  inactiveTrackColor: Colors.black26,
+                  value: _selectedCommandMode == 'ok, styslo',
+                  onChanged: (bool value) async {
+                    final String nextMode = value ? 'ok, styslo' : 'button';
+                    
+                    setState(() {
+                      _selectedCommandMode = nextMode;
+                    });
+                    
+                    await Future.delayed(const Duration(milliseconds: 190));
+
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      widget.onCommandModeChanged(nextMode);
+                    });
+                  },
+                ),
+              ),
+            ), 
+          ], 
+        ), //
       ),
     );
   }

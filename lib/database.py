@@ -41,6 +41,7 @@ class Article(Base):
     title = Column(String, nullable=False)
     source_url = Column(String, nullable=True)  
     raw_text = Column(Text, nullable=False)    
+    audio_url = Column(String, nullable=True)  
     published_at = Column(DateTime, nullable=True) 
     parsed_at = Column(DateTime, default=datetime.utcnow) 
     

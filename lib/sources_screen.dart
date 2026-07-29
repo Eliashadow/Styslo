@@ -1,22 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:logger/logger.dart';
 
 class SourcesScreen extends StatefulWidget {
-  const SourcesScreen({Key? key}) : super(key: key);
+  const SourcesScreen({super.key});
 
   @override
   State<SourcesScreen> createState() => _SourcesScreenState();
 }
 
 class _SourcesScreenState extends State<SourcesScreen> {
+
   List<dynamic> _categoriesWithSources = [];
   bool _isLoading = true;
-  final String _baseUrl = "http://192.168.1.125:8000/api"; 
+  final String _baseUrl = "http://192.168.1.126:8000/api"; 
   
   final TextEditingController _categoryController = TextEditingController();
   final TextEditingController _sourceNameController = TextEditingController();
   final TextEditingController _sourceUrlController = TextEditingController();
+
+  final logger = Logger(
+  printer: PrettyPrinter(
+    methodCount: 0,       
+    errorMethodCount: 5,  
+    lineLength: 80,       
+      ),
+    );
 
   @override
   void initState() {
@@ -35,7 +45,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
         });
       }
     } catch (e) {
-      print("Error loading: $e");
+      logger.e("[SOURCES SCREEN DEBUG] Error loading: $e");
       setState(() => _isLoading = false);
     }
   }
@@ -48,15 +58,24 @@ class _SourcesScreenState extends State<SourcesScreen> {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({"name": name}),
       );
+      if (!mounted) return;
+
       if (response.statusCode == 201) {
         _categoryController.clear();
         _fetchSources();
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Category '$name' created")),
         );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to create category: ${response.statusCode}'))
+        );
       }
     } catch (e) {
-      print("Error of creating category: $e");
+      if (!mounted) return;
+
+      logger.e("[SOURCES SCREEN DEBUG] Error of creating category: $e");
     }
   }
 
@@ -72,6 +91,8 @@ class _SourcesScreenState extends State<SourcesScreen> {
           "category": catName,
         }),
       );
+      if (!mounted) return;
+
       if (response.statusCode == 201 || response.statusCode == 200) {
         _sourceNameController.clear();
         _sourceUrlController.clear();
@@ -79,37 +100,54 @@ class _SourcesScreenState extends State<SourcesScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Source added to category $catName")),
         );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to add source to category ${response.statusCode}'))
+        );
       }
     } catch (e) {
-      print("Error adding source: $e");
+      if (!mounted) return;
+
+      logger.e("[SOURCES SCREEN DEBUG] Error adding source: $e");
     }
   }
 
   Future<void> _deleteCategory(String catName) async {
     try {
       final response = await http.delete(Uri.parse("$_baseUrl/categories/$catName"));
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
         _fetchSources();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Category '$catName' deleted")),
         );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete categoty ${response.statusCode}'))
+        );
       }
     } catch (e) {
-      print("Error deleting category: $e");
+      if (!mounted) return;
+      logger.e("[SOURCES SCREEN DEBUG] Error deleting category: $e");
     }
   }
 
   Future<void> _deleteSource(int id) async {
     try {
       final response = await http.delete(Uri.parse("$_baseUrl/sources/$id"));
+      if (!mounted) return;
+
       if (response.statusCode == 200) {
         _fetchSources();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Source deleted")),
         );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete source ${response.statusCode}'))
+        );
       }
     } catch (e) {
-      print("Error deleting source: $e");
+      if (!mounted) return;
+      logger.e("[SOURCES SCREEN DEBUG] Error deleting source: $e");
     }
   }
 
