@@ -16,14 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from database import get_db, Category, Source, Article, Digest, SessionLocal, init_db
 from sqlalchemy import func
-from parser import parse_rss_sources
+from parser import parse_rss_sources, parse_telegram_sources, parse_api_sources
 from logger import Logger, Timer, LogLevel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     l.info("Data base initialized successfully")
-    seconds = 900
+    seconds = 600
     scheduler.add_job(run_background_parser, 'interval', seconds=seconds, id='news_parser_job')
     scheduler.start()
     l.info(f"[FastAPI] Background scheduler started (test interval: {seconds} seconds).")
@@ -83,6 +83,11 @@ def run_background_parser():
     db = SessionLocal()  
     try:
         parse_rss_sources(db)  
+        l.info("[Scheduler] RSS parsing completed successfully.")
+        parse_telegram_sources(db)
+        l.info("[Scheduler] Telegram parsing completed successfully.")
+        parse_api_sources(db)
+        l.info("[Scheduler] Api parsing completed successfully.")
         l.info("[Scheduler] Background parsing completed successfully.")
     except Exception as e:
         l.error(f"[Scheduler] Scheduler error: {e}")
@@ -207,10 +212,19 @@ async def add_source(request: SourceRequest, db: Session = Depends(get_db)):
     if existing_source:
         return {"status": "exists", "message": f"Source is already linked to the category {category.name}"}
 
+    url = request.url.strip().lower()
+    
+    if "@" in url:
+        source_type = 'telegram'
+    elif "api" in url or "vercel.app" in url:
+        source_type = 'api'
+    else:
+        source_type = 'rss'
+
     new_source = Source(
         category_id=category.id,
         name=request.name.strip(),
-        source_type="rss", 
+        source_type=source_type, 
         url_or_credentials=request.url.strip(),
         is_active=True
     )
@@ -269,15 +283,6 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             l.debug(f'Checking file at {temp_wav_path}...')
             l.debug(f'Does file exist? {os.path.exists(temp_wav_path)}')
             
-            # file_name = f"{uuid.uuid4()}.wav"
-            # final_mp3_path = os.path.join("storage/audio", file_name)
-
-            # sound = AudioSegment.from_wav(temp_wav_path)
-            # sound.export(final_mp3_path, format="mp3")
-
-            # if os.path.exists(temp_wav_path):
-            #     os.remove(temp_wav_path)
-
             audio_url = f"{fastapi_req.base_url}audio/{file_name}"
             l.debug(f'Created audio url: {audio_url} \n Number of characters {len(audio_url)} \n Number of characters with trim {len(audio_url.strip())}')
             new_article = Article(
