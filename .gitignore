@@ -19,3 +19,4 @@ assets/models/voice
 assets/ffmpeg
 bin/
 *.session
+.venv/
