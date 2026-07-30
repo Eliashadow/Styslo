@@ -62,25 +62,25 @@ Future<void> _activateAudioService() async {
   await session.setActive(true);
 
   session.becomingNoisyEventStream.listen((_) {
-    logger.i('[HEADSET DEBUG] Becoming noisy event: Pausing audio');
+    logger.i('[HEADSET] Becoming noisy event: Pausing audio');
     pause(); 
   });
 
   session.interruptionEventStream.listen((event) {
     if (event.begin) {
-      logger.i('[HEADSET DEBUG] Something happened(mostly cause of incoming call), so stopping');
+      logger.i('[HEADSET] Something happened(mostly cause of incoming call), so stopping');
       pause();
     }
   });
   bool success = await session.setActive(true);
   if (!success) {
-    logger.e("[AUDIO DEBUG] Failed to gain audio focus!");
+    logger.e("[AUDIO] Failed to gain audio focus!");
   }
 
 }
 
   void updatePlaybackState(bool isPlaying) {
-    logger.i('[HEADSET DEBUG] Playing status in updatePlaybackState: $isPlaying');
+    logger.i('[HEADSET] Playing status in updatePlaybackState: $isPlaying');
     playbackState.add(playbackState.value.copyWith(
       playing: isPlaying,
       controls: [

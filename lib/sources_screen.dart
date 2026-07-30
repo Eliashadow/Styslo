@@ -45,7 +45,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
         });
       }
     } catch (e) {
-      logger.e("[SOURCES SCREEN DEBUG] Error loading: $e");
+      logger.e("[SOURCES SCREEN] Error loading: $e");
       setState(() => _isLoading = false);
     }
   }
@@ -75,7 +75,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     } catch (e) {
       if (!mounted) return;
 
-      logger.e("[SOURCES SCREEN DEBUG] Error of creating category: $e");
+      logger.e("[SOURCES SCREEN] Error of creating category: $e");
     }
   }
 
@@ -107,7 +107,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
     } catch (e) {
       if (!mounted) return;
 
-      logger.e("[SOURCES SCREEN DEBUG] Error adding source: $e");
+      logger.e("[SOURCES SCREEN] Error adding source: $e");
     }
   }
 
@@ -127,7 +127,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      logger.e("[SOURCES SCREEN DEBUG] Error deleting category: $e");
+      logger.e("[SOURCES SCREEN] Error deleting category: $e");
     }
   }
 
@@ -147,7 +147,7 @@ class _SourcesScreenState extends State<SourcesScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      logger.e("[SOURCES SCREEN DEBUG] Error deleting source: $e");
+      logger.e("[SOURCES SCREEN] Error deleting source: $e");
     }
   }
 
