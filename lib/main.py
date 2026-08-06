@@ -328,6 +328,23 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             l.error(f'Validation error {e.json()}')
             raise HTTPException(status_code=500, detail=e.errors())
 
+
+@app.get("/api/digests")
+def get_digests(db: Session = Depends(get_db)):
+    digests = db.query(Digest).order_by(Digest.created_at.desc()).limit(20).all()
+    result = []
+
+    for digest in digests:
+        used_articles = []
+
+        for link in sorted(digest.article_links, key=lambda item: item.position or 0):
+            used_articles.append({"id": link.article.id, "position": link.position, "title": link.article.title, "url": link.article.source_url})
+
+        result.append({"id": digest.id, "category": digest.category.name, "compression_level": digest.compression_level, "summary_text": digest.summary_text, "ai_model": digest.ai_model, "audio_url": digest.audio_url, "created_at": digest.created_at, "used_articles": used_articles})
+
+    return result
+
+
 @app.get("/api/sources")
 def get_all_sources(db: Session = Depends(get_db)):
     categories = db.query(Category).all()
