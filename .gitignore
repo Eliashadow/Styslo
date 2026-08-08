@@ -20,3 +20,4 @@ assets/ffmpeg
 bin/
 *.session
 .venv/
+*.db
