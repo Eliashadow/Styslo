@@ -84,6 +84,7 @@ class Digest(Base):
     ai_model = Column(String(100),nullable=True)
     audio_url = Column(String, nullable=True)          
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    title = Column(String(500), nullable=True)
     
     user = relationship("User", back_populates="digests")
     category = relationship("Category", back_populates="digests")
@@ -113,6 +114,7 @@ class AudioFile(Base):
     language = Column(String(20), default="uk-UA")
     voice_name = Column(String(100), nullable=True)
     duration_seconds = Column(Integer, nullable=True)
+    timing_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     digest = relationship("Digest", back_populates="audio_files")

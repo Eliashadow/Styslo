@@ -14,7 +14,7 @@ import uuid
 import os 
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from database import (get_db, Category, Source, Article, Digest, DigestArticle, SessionLocal, init_db)
+from database import (get_db,User, UserCategory, Category, Source, Article, Digest, DigestArticle, SessionLocal, init_db)
 from sqlalchemy import func
 from parser import parse_rss_sources, parse_telegram_sources, parse_api_sources
 from logger import Logger, Timer, LogLevel
@@ -63,9 +63,15 @@ class NewsRequest(BaseModel):
     category: str 
     title: str
     compression: str  
+    user_id: int | None = None
     language: str  = "uk_UA"
     speech_rate: float = 0.5
-
+class UserCreateRequest(BaseModel):
+    name: str | None = None
+    email: str
+    password_hash: str | None = None
+class UserCategoriesRequest(BaseModel):
+    category_ids: list[int]
 class SourceRequest(BaseModel):
     name: str        
     url: str         
@@ -248,6 +254,12 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             
             category = None
             all_categories = db.query(Category).all()
+            if request.user_id is not None:
+                user = db.query(User).filter(User.id == request.user_id).first()
+
+            if not user:
+                raise HTTPException(status_code=404, detail=f"User with id {request.user_id} not found.")
+            
             for cat in all_categories:
                 if req_category.lower() in cat.name.lower() or cat.name.lower() in req_category.lower():
                     category = cat
@@ -271,28 +283,31 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
             main_title = latest_articles[0].title
             combined_news_text = "\n\n".join([f"News: {a.title}. {a.raw_text or ''}" for a in latest_articles])
             final_content = await summarize_news(combined_news_text, req_compression)
-            
-            file_name = f"{uuid.uuid4()}.wav"
-            output_path = audio_dir / file_name
 
-            temp_wav_path, timings = await generate_speech(final_content, request.language, request.speech_rate, output_path)
+
+            audio_url = None
+            timings = []
             
-            if not temp_wav_path:
-                raise HTTPException(status_code=500, detail='Speech/aligment generation failed')
+            #file_name = f"{uuid.uuid4()}.wav"
+            #output_path = audio_dir / file_name
+
+            #temp_wav_path, timings = await generate_speech(final_content, request.language, request.speech_rate, output_path)
             
-            l.debug(f'Checking file at {temp_wav_path}...')
-            l.debug(f'Does file exist? {os.path.exists(temp_wav_path)}')
+            #if not temp_wav_path:
+                #raise HTTPException(status_code=500, detail='Speech/aligment generation failed')
             
-            audio_url = f"{fastapi_req.base_url}audio/{file_name}"
-            l.debug(f'Created audio url: {audio_url} \n Number of characters {len(audio_url)} \n Number of characters with trim {len(audio_url.strip())}')
+            #l.debug(f'Checking file at {temp_wav_path}...')
+            #l.debug(f'Does file exist? {os.path.exists(temp_wav_path)}')
+            
+            #audio_url = f"{fastapi_req.base_url}audio/{file_name}"
+            #l.debug(f'Created audio url: {audio_url} \n Number of characters {len(audio_url)} \n Number of characters with trim {len(audio_url.strip())}')
             new_digest = Digest(
+                user_id=request.user_id,
                 category_id=category.id,
+                title=main_title,
                 compression_level=req_compression,
-                title = main_title,
-                source_id = 1,
                 summary_text=final_content,
-                timing=timings,
-                audio_url=audio_url 
+                audio_url=audio_url
             )
             try:
                 db.add(new_digest)
@@ -327,7 +342,87 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
         except ValidationError as e:
             l.error(f'Validation error {e.json()}')
             raise HTTPException(status_code=500, detail=e.errors())
+@app.post("/api/users")
+def create_user(request: UserCreateRequest, db: Session = Depends(get_db)):
+        existing_user = db.query(User).filter(User.email == request.email).first()
 
+        if existing_user:
+            raise HTTPException(status_code=400, detail="User with this email already exists.")
+
+        new_user = User(name=request.name, email=request.email, password_hash=request.password_hash)
+
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+
+        return {"id": new_user.id, "name": new_user.name, "email": new_user.email, "created_at": new_user.created_at}
+
+@app.post("/api/users")
+def create_user(request: UserCreateRequest, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == request.email).first()
+
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User with this email already exists.")
+
+    new_user = User(
+        name=request.name,
+        email=request.email,
+        password_hash=request.password_hash
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "id": new_user.id,
+        "name": new_user.name,
+        "email": new_user.email,
+        "created_at": new_user.created_at
+    }
+
+@app.get("/api/users/{user_id}/digests")
+def get_user_digests(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
+
+    digests = db.query(Digest).filter(Digest.user_id == user_id).order_by(Digest.created_at.desc()).limit(20).all()
+
+    result = []
+
+    for digest in digests:
+        used_articles = []
+
+        for link in sorted(digest.article_links, key=lambda item: item.position or 0):
+            used_articles.append({"id": link.article.id, "position": link.position, "title": link.article.title, "url": link.article.source_url})
+
+        result.append({"id": digest.id, "category": digest.category.name, "compression_level": digest.compression_level, "summary_text": digest.summary_text, "ai_model": digest.ai_model, "audio_url": digest.audio_url, "created_at": digest.created_at, "used_articles": used_articles})
+
+    return result
+
+@app.put("/api/users/{user_id}/categories")
+def update_user_categories(user_id: int, request: UserCategoriesRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
+
+    categories = db.query(Category).filter(Category.id.in_(request.category_ids)).all()
+
+    if len(categories) != len(request.category_ids):
+        raise HTTPException(status_code=400, detail="Some category IDs do not exist.")
+
+    db.query(UserCategory).filter(UserCategory.user_id == user_id).delete()
+
+    for category_id in request.category_ids:
+        subscription = UserCategory(user_id=user_id, category_id=category_id)
+        db.add(subscription)
+
+    db.commit()
+
+    return {"user_id": user_id, "category_ids": request.category_ids}
 
 @app.get("/api/digests")
 def get_digests(db: Session = Depends(get_db)):
