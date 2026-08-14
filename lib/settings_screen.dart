@@ -1,21 +1,32 @@
+// A screen that allows users to configure application settings.
+
+// ====  Essential imports ==== 
 import 'package:flutter/material.dart';
 
+// Variables
 class SettingsScreen extends StatefulWidget {
+  // ====  Language ==== 
   final String initialLanguage;
   final ValueChanged<String> onLanguageChanged;
+  // ====  SpeechRate ==== 
   final double initialSpeechRate;
   final ValueChanged<double> onSpeechRateChanged;
+  // ====  Mode ==== 
   final String initialCommandMode;
   final ValueChanged<String> onCommandModeChanged;
 
+  // Getting from main variables and sending them
   const SettingsScreen({
     super.key,
 
+    // Getting
     required this.initialLanguage,
     required this.initialSpeechRate,
+    required this.initialCommandMode,
+
+    // Sending
     required this.onLanguageChanged,
     required this.onSpeechRateChanged,
-    required this.initialCommandMode,
     required this.onCommandModeChanged,
 
   });
@@ -24,13 +35,16 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
+// Setting Screen
 class _SettingsScreenState extends State<SettingsScreen> {
+  // ====  Variables ==== 
   late String _selectedLanguage;
   late String _selectedCommandMode;
   late double _speechRate;
 
-  final List<String> _allowedLanguages = ["uk-UA", "en-US", "en-UK"];
+  final List<String> _allowedLanguages = ["uk-UA", "en-US", "en-UK"]; // for checking incoming language
 
+  // Initializating variables through main
   @override
   void initState() {
     super.initState();
@@ -39,6 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _speechRate = widget.initialSpeechRate;
   }
 
+  // UI
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -50,10 +65,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
+        // Body
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            //language
+            // Language
             const Text(
               "Language (TTS)",
               style: TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold),
@@ -83,6 +99,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onChanged: (String? newValue) {
                     if (newValue != null) {
                       setState(() => _selectedLanguage = newValue);
+                      // Sending update to main
                       widget.onLanguageChanged(newValue);
                     }
                   },
@@ -92,7 +109,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             
             const SizedBox(height: 30), 
 
-            // --- spech rate ---
+            // Speech rate
             Text(
               "Speech rate: ${_speechRate.toStringAsFixed(1)}",
               style: const TextStyle(color: Colors.grey, fontSize: 14, fontWeight: FontWeight.bold),
@@ -106,12 +123,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
               inactiveColor: Colors.grey[800],
               onChanged: (value) {
                 setState(() => _speechRate = value);
+                // Sending update to main
                 widget.onSpeechRateChanged(value); 
               },
             ),
 
-            const SizedBox(height: 30), 
-            
+            const SizedBox(height: 30),
+
+            // Mode 
             Card(
               color: Colors.grey[900],
               margin: EdgeInsets.zero, 
@@ -121,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                // Toggle switch
                 child: SwitchListTile(
                   title: const Text(
                     "Mode \"Ok, Styslo\"",
@@ -148,19 +168,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() {
                       _selectedCommandMode = nextMode;
                     });
-                    
+
+                    // Giving hardware to process and avoid stuttering
                     await Future.delayed(const Duration(milliseconds: 190));
 
                     WidgetsBinding.instance.addPostFrameCallback((_) {
+                      // Sending update to main
                       widget.onCommandModeChanged(nextMode);
                     });
                   },
+                // Body
                 ),
               ),
             ), 
           ], 
-        ), //
+        ), 
       ),
+
     );
-  }
-}
+  // UI
+  } 
+  
+} // Settings Screen

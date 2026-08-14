@@ -1,42 +1,46 @@
-// ----Essential imports----
+// ====  Essential imports ==== 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 
-// ----Audio imports----
+// ====  Audio imports ==== 
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 
-// ----Internet imports----
+// ====  Internet imports ==== 
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'dart:async';
 
-// ----Offline imports----
+// ====  Offline imports ==== 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 
-// ----Ok, Styslo imports----
+// ====  Ok, Styslo imports ==== 
 import 'package:vosk_flutter/vosk_flutter.dart';
 
-// ----Logs import----
+// ====  Logs import ==== 
 import 'package:logger/logger.dart';
 
-// ----Other screens imports----
+// ====  Other screens imports ==== 
 import 'audio_command_handler.dart';
+import 'digests_screen.dart';
 import 'sources_screen.dart';
 import 'settings_screen.dart';
 import 'local_database.dart';
 
+
 late AudioCommandHandler globalAudioHandler;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
+  
+  // Check if version release to turn off logger
   if (const bool.fromEnvironment('dart.vm.product')) {
     Logger.level = Level.off; 
   }
 
+  // Initializiting AudioHandler to show notifications
   globalAudioHandler = await AudioService.init(
     builder: () => AudioCommandHandler(),
     config: const AudioServiceConfig(
@@ -73,37 +77,14 @@ class PlayerScreen extends StatefulWidget {
   State<PlayerScreen> createState() => _PlayerScreenState();
 }
 
+// Player Screen 
 class _PlayerScreenState extends State<PlayerScreen> {
+  // ==== Screens ====
+  int _currentIndex = 0; // 0 — home, 1 — digest_screen, 2 — sources_screen, 3 — settings_screen 
+
+  // ====  Audio settings ==== 
   final AudioPlayer _audioPlayer = AudioPlayer();
   late AudioCommandHandler _audioHandler;
-
-  // ----Categories----
-  String _currentChannel = "General"; 
-  List<String> _dynamicCategories = ["General"]; 
-  bool _isCategoriesLoading = true;
-
-  // ----Internet related----
-  final String _apiBaseUrl = "http://192.168.1.126:8000/api";
-  Map<String, dynamic> _remoteCategories = {};
-  Map<String, dynamic> _remoteCompression = {};
-  bool _isConfigLoaded = false;
-  StreamSubscription<List<ConnectivityResult>>? _subscription;
-  bool _isOnline = false;
-
-  // ----Intent parser----
-  bool _isListening = false;
-  bool _isIniatializing = false;
-  String _recognizedText = 'waiting...';
-  String _selectedCommandMode = 'button';
-  final TextEditingController _commandController = TextEditingController();
-  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
-  Model? _voskModel;
-  Recognizer? _recognizer;
-  SpeechService? _speechService;
-  bool _isVoskReady = false;
-  StreamSubscription? _voskSubscription;
-
-  // ----Audio Player Settings----
   String _currentTitle = 'Lorem Ipsum';
   String _selectedLanguage = "uk-UA";
   double _speechRate = 0.5;
@@ -113,8 +94,34 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _currentlyHighlightedIndex = -1;
   String _audioUrl = '';
 
+  // ====  Categories ==== 
+  String _currentChannel = "General"; 
+  List<String> _dynamicCategories = ["General"]; // Holds just the names for dropdowns
+  List<dynamic> _dynamicCategoriesWithSource = []; // Holds full maps with sources (offline sources)
+  bool _isCategoriesLoading = true;
 
-  // ----Log----
+  // ====  Internet related ==== 
+  final String _apiBaseUrl = "http://192.168.1.126:8000/api";
+  Map<String, dynamic> _remoteCategories = {};
+  Map<String, dynamic> _remoteCompression = {};
+  bool _isConfigLoaded = false;
+  StreamSubscription<List<ConnectivityResult>>? _subscription;
+  bool _isOnline = false;
+
+  // ====  Intent parser ==== 
+  StreamSubscription? _voskSubscription;
+  Model? _voskModel;
+  Recognizer? _recognizer;
+  SpeechService? _speechService;
+  final TextEditingController _commandController = TextEditingController();
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
+  bool _isVoskReady = false;
+  bool _isListening = false;
+  bool _isIniatializing = false;
+  String _recognizedText = '';
+  String _selectedCommandMode = 'button';
+  
+  // ====  Logs ==== 
   final logger = Logger(
   printer: PrettyPrinter(
     methodCount: 0,       
@@ -124,6 +131,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   ),
 );
 
+  // Initializiting services
   @override
   void initState() {
     super.initState();
@@ -134,40 +142,46 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _initAudioPlayer() async {
-  _audioPlayer.positionStream.listen((position) {
-    int milliseconds = position.inMilliseconds;
-    double currentSeconds = milliseconds / 1000.0;
+    // Listening stream to highlight current word
+    _audioPlayer.positionStream.listen((position) {
+      int milliseconds = position.inMilliseconds;
+      double currentSeconds = milliseconds / 1000.0; // Because Whisper returns in seconds and AudioPlayer listens in milliseconds 
 
-    int newIndex = _wordTimings.indexWhere((timing) {
-      double start = timing['Start']; 
-      double end = timing['End'];
+      // Highlighting word with information from Whisper
+      int newIndex = _wordTimings.indexWhere((timing) {
+        double start = timing['Start']; 
+        double end = timing['End'];
 
-      return currentSeconds >= start && currentSeconds <= end; 
-  });
-
-  if (newIndex != -1 && newIndex != _currentlyHighlightedIndex) {
-    setState(() {
-      _currentlyHighlightedIndex = newIndex;
+        return currentSeconds >= start && currentSeconds <= end; 
       });
-    }
-  });
-}
+
+      // Checking for false triggering
+      if (newIndex != -1 && newIndex != _currentlyHighlightedIndex) {
+        setState(() {
+          _currentlyHighlightedIndex = newIndex;
+        });
+      }
+    });
+  }
 
   void _initVosk() async {
-    logger.d("[VOSK] Initializing Vosk model...");
+    logger.i("[VOSK] Initializing Vosk model...");
+    // Loading vosk model from assets
     try{
       final modelPath = await ModelLoader().loadFromAssets('assets/models/voice/uk.zip');
       _voskModel = await _vosk.createModel(modelPath);
-      _recognizer = await _vosk.createRecognizer(model: _voskModel!, sampleRate: 16000);
+      _recognizer = await _vosk.createRecognizer(model: _voskModel!, sampleRate: 16000); // Setting listening 
 
+      // Setting variable to check later
       setState(() => _isVoskReady = true);
-      logger.d("[VOSK] Model initialized successfully.");
+      logger.i("[VOSK] Model initialized successfully.");
     } catch (e) {
       logger.d("[VOSK] Error initializing Vosk model: $e");
     }
   }
 
   Future<void> _initAudioService() async {
+    // Handling commands from,headphones
     _audioHandler = globalAudioHandler;
 
     final session = await AudioSession.instance;
@@ -193,21 +207,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _audioHandler.onPreviousTriggered = () async {
       await _switch();
     };
-  }
-
-  @override
-  void dispose() {
-    _audioHandler.onPlayTriggered = null;
-    _audioHandler.onPauseTriggered = null;
-    _audioHandler.onNextTriggered = null;
-    _audioHandler.onPreviousTriggered = null;
-
-    _commandController.dispose();
-
-    _voskSubscription?.cancel();
-    _speechService?.stop();
-    _subscription?.cancel();
-    super.dispose();
   }
 
   Future<void> _checkConnect() async {
@@ -247,20 +246,156 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  // Cleaning up after ending work
+  @override
+  void dispose() {
+    // Headphones
+    _audioHandler.onPlayTriggered = null;
+    _audioHandler.onPauseTriggered = null;
+    _audioHandler.onNextTriggered = null;
+    _audioHandler.onPreviousTriggered = null;
+
+    // Text
+    _commandController.dispose();
+    // Intent parser
+    _voskSubscription?.cancel();
+    _speechService?.stop();
+
+    //Internet
+    _subscription?.cancel();
+
+    super.dispose();
+  }
+
+  
+
   Future<void> _fetchConfig() async {
+    // Loading preferences in case offline
     await _loadPreferences();
 
-    if (_isOnline == true) {
+    // If online: getting categories from server
+    if (_isOnline) {
+      // Sync
       try {
-        final response = await http.get(Uri.parse("$_apiBaseUrl/config"));
+        // Retriving all actions from local db 
+        final pendingActions = await LocalDatabase.instance.getPendingActions();
+        for (var item in pendingActions) {
+          final int rowId = item['id'];
+          final String targetType = item['target_type'].toString();
+          final String targetValue = item['target_value'].toString();
+
+          http.Response? response;
+          // Sync any offline actions to the backend first to avoid crashing
+          if (targetType == 'category_del') {
+            response = await http.delete(
+              Uri.parse("$_apiBaseUrl/categories/${Uri.encodeComponent(targetValue)}"),
+            );
+          } else if (targetType == 'source_del') {
+            response = await http.delete(
+              Uri.parse("$_apiBaseUrl/sources/${Uri.encodeComponent(targetValue)}"),
+            );
+          } else if (targetType == 'category_add') {
+            response = await http.post(
+              Uri.parse("$_apiBaseUrl/categories"),
+              headers: {"Content-Type": "application/json"},
+              body: json.encode({"name": targetValue}),
+            );
+          } else if (targetType == 'source_add') {
+            final Map<String, dynamic> srcMap = json.decode(targetValue);
+            response = await http.post(
+              Uri.parse("$_apiBaseUrl/sources"),
+              headers: {"Content-Type": "application/json"},
+              body: json.encode(srcMap),
+            );
+          }
+
+          if (response != null && (response.statusCode == 200 || response.statusCode == 404)) {
+            // Successfully synced actions, remove from pending audit table
+            await LocalDatabase.instance.clearPendingActions(rowId);
+          }
+        }
+
+        // Getting sources from server
+        final response = await http.get(Uri.parse("$_apiBaseUrl/sources"));
         if (response.statusCode == 200) {
-          final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
-          
+          final data = json.decode(utf8.decode(response.bodyBytes));
+
+          List<dynamic> categoriesList = [];
+          Map<String, dynamic> remoteCategoriesMap = {};
+          Map<String, dynamic> remoteCompressionMap = {};
+
+          // Download data to offline use in source screen
+          // Handle if root response is a List (like categories with sources array)
+          if (data is List) {
+            categoriesList = data.map((cat) {
+              if (cat is Map) {
+                final catName = cat["category_name"]?.toString() ?? "General";
+                final rawSources = cat["sources"] ?? [];
+                List parsedSources = [];
+                if (rawSources is List) {
+                  parsedSources = rawSources.map((s) {
+                    if (s is Map) {
+                      return {
+                        "id": s["id"],
+                        "name": s["name"] ?? s["title"] ?? "Unknown",
+                        "url": s["url"] ?? s["url_or_credentials"] ?? "",
+                      };
+                    }
+                    return {"name": s.toString(), "url": ""};
+                  }).toList();
+                }
+                return {
+                  "category_name": catName,
+                  "sources": parsedSources,
+                };
+              }
+              return {"category_name": cat.toString(), "sources": []};
+            }).toList();
+          } else if (data is Map) {
+            // If root response is a Map containing a "categories" key
+            final rawCategories = data["categories"] ?? [];
+            if (rawCategories is Map) {
+              categoriesList = rawCategories.entries.map((entry) {
+                final val = entry.value;
+                List parsedSources = [];
+                if (val is List) {
+                  parsedSources = val.map((s) {
+                    if (s is Map) return s;
+                    return {"name": s.toString(), "url": ""};
+                  }).toList();
+                }
+                return {
+                  "category_name": entry.key.toString(),
+                  "sources": parsedSources,
+                };
+              }).toList();
+            } else if (rawCategories is List) {
+              categoriesList = rawCategories.map((cat) {
+                if (cat is Map) {
+                  return {
+                    "category_name": cat["category_name"]?.toString() ?? "General",
+                    "sources": cat["sources"] is List ? cat["sources"] : [],
+                  };
+                }
+                return {"category_name": cat.toString(), "sources": []};
+              }).toList();
+            }
+
+            if (data["categories"] is Map<String, dynamic>) {
+              remoteCategoriesMap = data["categories"];
+            }
+            if (data["compression"] is Map<String, dynamic>) {
+              remoteCompressionMap = data["compression"];
+            }
+          }
+
           setState(() {
-            _remoteCategories = data["categories"] ?? {};
-            _remoteCompression = data["compression"] ?? {};
-            
-            _dynamicCategories = _remoteCategories.keys.toList();
+            _remoteCategories = remoteCategoriesMap;
+            _remoteCompression = remoteCompressionMap;
+            _dynamicCategoriesWithSource = categoriesList;
+
+            // Extract names safely for the dropdown UI
+            _dynamicCategories = categoriesList.map((cat) => cat["category_name"].toString()).toList();
             
             if (_dynamicCategories.isNotEmpty && !_dynamicCategories.contains(_currentChannel)) {
               _currentChannel = _dynamicCategories.first;
@@ -269,8 +404,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             _isConfigLoaded = true;
           });
 
-          // Saving categories into database
-          await LocalDatabase.instance.saveCategories(_dynamicCategories);
+          // Saving categories and sources into local db for offline use
+          await LocalDatabase.instance.saveCategoriesAndSources(_dynamicCategoriesWithSource);
           return;
         }
       } catch (e) {
@@ -279,18 +414,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     // If there is not internet or error in fetching
     final localCategories = await LocalDatabase.instance.getCategories();
+
     setState(() {
       if (localCategories.isNotEmpty) {
         _dynamicCategories = localCategories;
         if (!_dynamicCategories.contains(_currentChannel)) {
           _currentChannel = _dynamicCategories.first;
-        }
-    }
-    _isCategoriesLoading = false;
-    _isConfigLoaded = localCategories.isNotEmpty;
+        } 
+      } else {
+        _currentChannel = 'General';
+      }
+      _isCategoriesLoading = false;
+      _isConfigLoaded = localCategories.isNotEmpty;
     });
   }
 
+  // Saving audio variables for offline
   Future<void> _savePreferences() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('speech_rate', _speechRate);
@@ -298,6 +437,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     await prefs.setString('current_channel', _currentChannel);
   }
 
+  // Loading audio variables for offline
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
@@ -347,11 +487,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
             category: categoryName,
             title: title,
             content: content,
-            audioPath: localFile.path, // Saving local path except link
+            audioPath: localFile.path, // Saving local path instead of link
             timingsJson: jsonEncode(timings),
           );
 
-          logger.i("Successfully cached category '$categoryName' offline.");
+          logger.i("Successfully cached category '$categoryName'.");
         }
       }
     } catch (e) {
@@ -379,13 +519,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
   }
-  
+
+  // Online mode: Loading from server
   Future<void> _loadLiveNews() async {
+    // Timings to highlight words
     List<dynamic>? fetchedTimings;
 
     try {
       final String backendUrl = "$_apiBaseUrl/news";
 
+      // Sending request to get_news
       final response = await http.post(
         Uri.parse(backendUrl),
         headers: {"Content-Type": "application/json"},
@@ -397,7 +540,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           'title': _currentTitle,
         }),
       );
-   
+
+      // If successful, return audio URL and timings
       if (response.statusCode == 200) {
         final Map<String, dynamic> data = json.decode(utf8.decode(response.bodyBytes));
 
@@ -406,61 +550,61 @@ class _PlayerScreenState extends State<PlayerScreen> {
         setState(() {
           _wordTimings = List<Map<String, dynamic>>.from(fetchedTimings!);
         });
-        logger.i('Fetched timings: $_wordTimings');
+        logger.d('Fetched timings: $_wordTimings');
       } else {
         logger.e("Server error: ${response.statusCode}");
       }
     } catch (e) {
       logger.e("Can't connect. Check backend");
     }
-
+    // Start playing at once if pressed button
     if (_isPlaying) {
       _speak(_audioUrl);
     }
   }
 
-  Future<void> _speak(String url) async {
-    _audioUrl = url;
-    if (_audioUrl == ''){
-      await _loadOrGoOffline();
-      if (_audioUrl == '') return;
-    } 
+  // Function to play audio 
+  Future<void> _speak(String urlOrPath) async {
+    if (urlOrPath.isEmpty) {
+    await _loadOrGoOffline(); // Using universal loader
+    if (_audioUrl.isEmpty) return;
+    urlOrPath = _audioUrl;
+  }
 
+    // Activating audio session to show notification and handle headphones
     final session = await AudioSession.instance;
     if (!(await session.setActive(true))) return;
 
     globalAudioHandler.mediaItem.add(MediaItem(
-      id: _audioUrl,
+      id: urlOrPath,
       album: _currentChannel,
       title: _currentTitle,
       artist: _currentChannel,
       duration: const Duration(hours: 1),
     ));
 
-    logger.i('Attempting to play URL: $_audioUrl');
-    try {
-      // Checking if user online to choose correct set
-      if (_isOnline) {
-        await _audioPlayer.setUrl(_audioUrl,).timeout(
-          const Duration(seconds: 10),
-          onTimeout: () => throw Exception("Connection to server timed out"),
-        );
-      } else {
-        _audioPlayer.setFilePath(_audioUrl); 
-      }
-
-      await _audioPlayer.play();
-
-      _audioHandler.updatePlaybackState(true);
-
-      setState(() => _isPlaying = true);
-      logger.i('Playing status in _speak: $_isPlaying');
-
-    } catch (e) {
-      logger.e("Error with URL $_audioUrl: $e");
+   try {
+    // Check if local then use setFilePath
+    if (urlOrPath.startsWith('/') || urlOrPath.contains('application_documents')) {
+      logger.i('Attempting to play LOCAL file: $urlOrPath');
+      await _audioPlayer.setFilePath(urlOrPath);
+    } else {
+      logger.i('Attempting to play NETWORK URL: $urlOrPath');
+      await _audioPlayer.setUrl(urlOrPath).timeout(
+        const Duration(seconds: 10), // In case of network issues
+        onTimeout: () => throw Exception("Connection timed out"),
+      );
     }
-  }
 
+    await _audioPlayer.play();
+    _audioHandler.updatePlaybackState(true);
+    setState(() => _isPlaying = true);
+
+  } catch (e) {
+    logger.e("Error playing audio source ($urlOrPath): $e");
+  }
+}
+  // Function to stop audio
   Future<void> _stop() async {
       await _audioPlayer.stop();
       _audioHandler.updatePlaybackState(false);
@@ -469,31 +613,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   }
 
-  Future<void> _stopVosk() async {
-    logger.d('[VOSK] Forcing hard stop of Vosk SpeechService...');
-    
-    if (_voskSubscription != null) {
-      await _voskSubscription!.cancel();
-      _voskSubscription = null;
-      logger.i('[VOSK] Stream subscription successfully canceled.');
-    }
-
-    if (_speechService != null) {
-      try {
-        await _speechService!.stop();
-        logger.i('[VOSK] Native speech service stopped.');
-      } catch (e) {
-        logger.e('[VOSK] Error while stopping speech service: $e');
-      }
-    }
-
-    setState(() => _isListening = false);
-
-    await Future.delayed(const Duration(milliseconds: 200));
-  }
-
+  // Function to listen said in "Ok, Styslo" mode.
   Future<void> _listen() async {
     logger.d('[VOSK] Received request to START mic. Current status: _isListening=$_isListening');
+
 
     if (_isIniatializing) {
       logger.d("[VOSK] Already initializing, skipping start request");
@@ -508,7 +631,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() => _isIniatializing = true);
 
     try {
-
+      // Checking if listener and recognizer are ready
       if (!_isVoskReady || _recognizer == null) {
         logger.w("[VOSK] Vosk is not ready yet.");
         return;
@@ -516,6 +639,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
       if (_speechService == null) {
         logger.d('[VOSK] SpeechService does not exist. Creating a NEW instance...');
+        // If speech service is not initialized, creating a new one
         _speechService = await _vosk.initSpeechService(_recognizer!);
       } else {
         logger.d('[VOSK] SpeechService ALREADY exists. Reusing it...');
@@ -523,14 +647,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
       if (_voskSubscription != null) {
         logger.d('[VOSK] Destroying subscription');
-        await _voskSubscription!.cancel();
+        await _voskSubscription!.cancel(); // If exists, canceling previous subscription to prevent multiple listeners
       }
 
-
+      // Creating a new subsctiption to listen for results
       _voskSubscription = _speechService!.onResult().listen((jsonResult) {
         try {
+          // If in button mode, return to prevent leaking memory
           if (_selectedCommandMode == 'button') return;
 
+          // Parsing JSON result from Vosk
           final Map<String, dynamic> parsed = json.decode(jsonResult);
           if (parsed.containsKey('text') && parsed['text'].toString().isNotEmpty) {
             String recognizedWords = parsed['text'].toString();
@@ -544,6 +670,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         }
       });
 
+      // Starting the speech service to listen for commands
       logger.i('[VOSK] Starting audio stream...');
       await _speechService!.start(); 
       
@@ -555,27 +682,62 @@ class _PlayerScreenState extends State<PlayerScreen> {
         logger.e("[VOSK] Cannot start audio stream: $e");
         setState(() => _isListening = false);
     } finally {
+        // After finishing initialization, set the flag to false to allow future attempts
         setState(() => _isIniatializing = false);
         logger.i('[VOSK] Initialization function finished.');
     }
   }
 
+  // Function to stop listening
+  Future<void> _stopVosk() async {
+    logger.d('[VOSK] Forcing hard stop of Vosk SpeechService...');
+    
+    // Canceling subsciption if it exists
+    if (_voskSubscription != null) {
+      await _voskSubscription!.cancel();
+      _voskSubscription = null;
+      logger.i('[VOSK] Stream subscription successfully canceled.');
+    }
+
+    // Stopping speech service if it exists
+    if (_speechService != null) {
+      try {
+        await _speechService!.stop();
+        logger.i('[VOSK] Native speech service stopped.');
+      } catch (e) {
+        logger.e('[VOSK] Error while stopping speech service: $e');
+      }
+    }
+
+    setState(() => _isListening = false);
+
+    // Making sure the stop correctly finished (hardware might need sometime to process)
+    await Future.delayed(const Duration(milliseconds: 200));
+  }
+
+  // Function to process skipping and coming back to previous audio
   Future<void> _switch() async {
     logger.i('Sometime there will be something');
   }
 
+  // Voice command parser. It will check for wakeword, then check for category and compression triggers, then apply changes if needed
   void _executeCommand(String text) async {
+    // Clean up text after removing punctuation 
     String t = text.toLowerCase().replaceAll(RegExp(r'[^\w\sа-яА-ЯіІєЄїЇґҐ]'), '').trim();
 
+    // Logging the command and current mode
     logger.d("[PARSER] Command: '$t' | Mode: $_selectedCommandMode");
 
+    // Shutting down parser if in button mode
     if (_selectedCommandMode == 'button'){
       logger.d('[PARSER] In button mode, so shutting down parser');
       return;
     }
+
+    // Cheking for wakeword if in "Ok, Styslo" mode
     if (_selectedCommandMode == 'ok, styslo') {
       if (t.contains("окей стисло") || t.contains("ок стисло") || t.contains("hey styslo")) {
-        t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim();
+        t = t.replaceAll(RegExp(r'(окей стисло|ок стисло|hey styslo)'), '').trim(); // Cleaning up command after wakeword 
         logger.i("[PARSER] Wakeword found. Cleaned command: '$t'");
         if (t.isEmpty){
           logger.d('[PARSER] Empty command after wakeword.');
@@ -586,17 +748,20 @@ class _PlayerScreenState extends State<PlayerScreen> {
           }
         }
       } else {
+        // Failsafe: if wakeword is not found, ignore command
         logger.w("[PARSER] Ignored: without wakeword.");
         return;
       }
     }
 
+    // Checking for stop command  
     if (t.contains("пауз") || t.contains("стоп") || t.contains("зупини") || t.contains("stop")) {
       logger.d('[PARSER] Stop command recognized.');
       await _stop();
       return;
     }
 
+    // Checking for play command 
     if (t.contains("читай") || t.contains("увімкни") || t.contains("запусти") || t.contains("play") || t.contains("старт")) {
        logger.d("[PARSER] Play command recognized.");
        if (_audioUrl != '') {
@@ -605,15 +770,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
        }
     }
 
+    // Failsafe: before processsing next segment
     if (!_isConfigLoaded) {
       logger.e("[PARSER] Error: Server config not loaded yet.");
       return;
     } 
 
+    // Parser variables
     String nextChannel = _currentChannel;
     String nextCompression = _selectedCompression;
     bool isChanged = false;
 
+    // Looping through all categories and their triggers(server side)
     categoryLoop:
     for (var entry in _remoteCategories.entries) {
       String catName = entry.key;
@@ -628,6 +796,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
 
+    // Looping through all compression mode and their triggers(server side)
     compressionLoop:
     for (var entry in _remoteCompression.entries) {
       String compMode = entry.key;
@@ -642,8 +811,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
 
+    // Checking if any changes happened and applying them if needed
     if (nextChannel != _currentChannel || nextCompression != _selectedCompression){
       isChanged = true;
+      // Saving new setting for offline mode
       final prefs = await SharedPreferences.getInstance();
       setState(() {
         _speechRate = prefs.getDouble('speech_rate') ?? 0.5;
@@ -652,12 +823,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
         }
 
+    // Logging and applying changes if there are
     if(isChanged){
       logger.d("[PARSER] Changes detected. Applying new settings: Channel: '$nextChannel', Compression: '$nextCompression'");
       setState(() {
       _currentChannel = nextChannel;
       _selectedCompression = nextCompression;
-    }); 
+
+    });
+      // Saving for offline and using universal loader to play audio   
       await _savePreferences();
       await _loadOrGoOffline();
     } else{
@@ -671,192 +845,118 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Styslo'),
-        centerTitle: true,
-        backgroundColor: Colors.black,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings, color: Colors.blueAccent),
-            tooltip: "Settings",
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => SettingsScreen(
-                    initialLanguage: _selectedLanguage,
-                    initialSpeechRate: _speechRate,
-                    initialCommandMode: _selectedCommandMode,
-                    onCommandModeChanged: (newMode) async {
-                      setState(() => _selectedCommandMode = newMode);
-                      await _savePreferences();
-                      await Future.microtask(() async {
-                        try {
-                        if (newMode == 'ok, styslo') {
-                            logger.i("[SETTINGS] Switched to 'ok, styslo'. Ensuring mic is fresh and starting...");
-                            await _listen();
-                        } else {
-                            logger.i("[SETTINGS] Switched to '$newMode'. Turning off Vosk completely.");
-                            await _stopVosk();
-                          }
-                        } catch (e){
-                          logger.e("[SETTINGS] Error handling command mode change: $e");
-                        }
-                      });
-                    },
-                    
-                    onLanguageChanged: (newLang) async {
-                      setState(() => _selectedLanguage = newLang);
-                      await _savePreferences();
-                    },
-                    onSpeechRateChanged: (newRate) async {
-                      setState(() => _speechRate = newRate);
-                      await _savePreferences();
-                      await _loadOrGoOffline();
-                    },
-                    
-                  ),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.list_alt, color: Colors.blueAccent),
-            tooltip: "Source manager",
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SourcesScreen()),
-              ).then((_) {
-                _fetchConfig();
-              });
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if(!_isOnline)
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(bottom: 16),
-                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                decoration: BoxDecoration(
-                  color: Colors.redAccent.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.redAccent),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.offline_bolt, color: Colors.redAccent, size: 20),
-                    SizedBox(width: 8),
-                    Text(
-                      "You're offline. Check your connection",
-                      style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-              ),
+  // UI
+  Widget _buildHomeTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if(!_isOnline)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(20),
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
               decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5)),
+                color: Colors.redAccent.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.redAccent),
               ),
-              child: Column(
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    "$_currentTitle ",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.5,
-                  ),
-                  textAlign: TextAlign.center,
+                  Icon(Icons.offline_bolt, color: Colors.redAccent, size: 20),
+                  SizedBox(width: 8),
+                  Text("You're offline. Check your connection", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                ],
               ),
-
-              const SizedBox(height: 24),
-
-                  Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF1E1E1E),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
-                      ),
-                      child: Column(
-                        children: [
-                          _wordTimings.isNotEmpty
-                              ? RichText(
-                                  text: TextSpan(
-                                    style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.6),
-                                    children: _wordTimings.asMap().entries.map((entry) {
-                                      int index = entry.key;
-                                      String word = entry.value['Word'] ?? 'Unknown';
-                                      bool isHighlighted = index == _currentlyHighlightedIndex;
-
-                                      return TextSpan(
-                                        text: "$word " ,
-                                        style: isHighlighted
-                                          ? const TextStyle(color: Colors.black, backgroundColor: Colors.yellowAccent)
-                                          : const TextStyle(color: Colors.white)
-                                      );
-                                    }).toList(),
-                                  ),
-                                )
-                              : const Text(
-                                  "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
-                                  "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. "
-                                  "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. "
-                                  "Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. ",
-                                  style: TextStyle(color: Colors.white70, fontSize: 15),
-                                ),
-                          
-                          const SizedBox(height: 20),
-
-              Column(
-                  children: [
-                    const SizedBox(height: 15),
-                      _isCategoriesLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1E1E),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.5)),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  "$_currentTitle ",
+                  style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
+                  ),
+                  child: Column(
+                    children: [
+                      _wordTimings.isNotEmpty
+                          ? RichText(
+                              text: TextSpan(
+                                style: const TextStyle(color: Colors.white, fontSize: 16, height: 1.6),
+                                children: _wordTimings.asMap().entries.map((entry) {
+                                  int index = entry.key;
+                                  String word = entry.value['Word'] ?? 'Unknown';
+                                  bool isHighlighted = index == _currentlyHighlightedIndex;
+                                  return TextSpan(
+                                    text: "$word ",
+                                    style: isHighlighted ? const TextStyle(color: Colors.black, backgroundColor: Colors.yellowAccent) : const TextStyle(color: Colors.white)
+                                  );
+                                }).toList(),
+                              ),
                             )
-                          : DropdownButton<String>(
-                              value: _currentChannel,
-                              dropdownColor: Colors.black,
-                              style: const TextStyle(color: Colors.white, fontSize: 16),
-                              icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
-                              items: _dynamicCategories.map<DropdownMenuItem<String>>((String value) {
-                                return DropdownMenuItem<String>(
-                                  value: value,
-                                  child: Text(value),
-                                );
-                              }).toList(),
-                              onChanged: (String? newValue) {
-                                if (newValue != null) {
-                                  setState(() {
-                                    _currentChannel = newValue;
-                                  });
-                                  _loadOrGoOffline();
-                                }
-                              },
+                          : const Text(
+                              "Lorem ipsum dolor sit amet, consectetur adipiscing elit...",
+                              style: TextStyle(color: Colors.white70, fontSize: 15),
                             ),
-                            const SizedBox(height: 50),
+                      const SizedBox(height: 20),
+                      Column(
+                        children: [
+                          const SizedBox(height: 15),
+                          _isCategoriesLoading
+                              ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                              : DropdownButton<String>(
+                                  value: _currentChannel,
+                                  dropdownColor: Colors.black,
+                                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                                  icon: const Icon(Icons.arrow_drop_down, color: Colors.blueAccent),
+                                  items: _dynamicCategories.map<DropdownMenuItem<String>>((String value) {
+                                    return DropdownMenuItem<String>(value: value, child: Text(value));
+                                  }).toList(),
+                                  onChanged: (String? newValue) {
+                                    if (newValue != null) {
+                                      setState(() => _currentChannel = newValue);
+                                      _loadOrGoOffline();
+                                    }
+                                  },
+                                ),
+                          IconButton(
+                            icon: const Icon(Icons.download, color: Colors.blueAccent),
+                            tooltip: "Download for offline",
+                            onPressed: () async {
+                              bool success = true;
+                              try {
+                                await downloadCategoryOffline(_currentChannel);
+                              } catch(e) {
+                                setState(() => success = false);
+                              }
 
-              
+                              if (!mounted) return;
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(success ? "Category '$_currentChannel' downloaded!" : "Failed to download '$_currentChannel'.")),
+                              );
+                              
+                            },
+                          ),
+                          const SizedBox(height: 20),
                       // ---- OK, STYSLO (background mode) ----
                       if (_selectedCommandMode == 'ok, styslo') ...[
                         const Text(
@@ -872,26 +972,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           textAlign: TextAlign.center,
                           style: const TextStyle(fontSize: 18, fontStyle: FontStyle.italic, color: Colors.amberAccent),
                         ),
+
                       const SizedBox(height: 40),
-
-                    Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min, 
-                        children: [
-                            IconButton(
-                                  iconSize: 36,
-                                  icon: const Icon(Icons.skip_previous, color: Colors.blueAccent),
-                                  onPressed: () {
-                                    logger.d("[DEBUG UI] Skip backward pressed");
-                                  },
-                                ),
-                            const SizedBox(width: 24),
-                            GestureDetector(
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min, 
+                            children: [
+                              IconButton(
+                                iconSize: 36,
+                                icon: const Icon(Icons.skip_previous, color: Colors.blueAccent),
+                                onPressed: () => logger.d("[AUDIO HANDLER] Skip backward pressed"),
+                              ),
+                              const SizedBox(width: 24),
+                              GestureDetector(
                                 onTap: () {
-                                  setState(() {
-                                    _isPlaying = !_isPlaying;
-                                  });
-
+                                  setState(() => _isPlaying = !_isPlaying);
                                   if (_isPlaying) {
                                     _speak(_audioUrl);
                                   } else {
@@ -901,35 +996,139 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 child: CircleAvatar(
                                   radius: 45,
                                   backgroundColor: _isPlaying ? Colors.red : Colors.blueAccent,
-                                  child: Icon(
-                                    _isPlaying ? Icons.pause : Icons.play_arrow,
-                                    size: 40,
-                                    color: Colors.white,
-                                  ),
+                                  child: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, size: 40, color: Colors.white),
                                 ),
                               ),
-                                  const SizedBox(width: 20),
-                                  IconButton(
-                                      iconSize: 36,
-                                      icon: const Icon(Icons.skip_next, color: Colors.blueAccent),
-                                      onPressed: () {
-                                            logger.d("[DEBUG UI] Skip forward pressed");
-                                    },
-                                  ),
-                                ],
+                              const SizedBox(width: 20),
+                              IconButton(
+                                iconSize: 36,
+                                icon: const Icon(Icons.skip_next, color: Colors.blueAccent),
+                                onPressed: () => logger.d("[AUDIO HANDLER] Skip forward pressed"),
                               ),
                             ],
-                          ), 
-                      ],
-                    ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
-                ], 
-              ),
+                ),
+              ],
             ),
-          ],
-
-        ),
+          ),
+        ],
       ),
     );
-  } 
-} 
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Defining corresponding bodies based on active bottom navigation index
+    final List<Widget> pages = [
+      _buildHomeTab(),
+      DigestsScreen(
+        initialLanguage: _selectedLanguage,
+        initialSpeechRate: _speechRate,
+        initialCompression: _selectedCompression,
+
+        onLanguageChanged: (newLang) async {
+          setState(() => _selectedLanguage = newLang);
+          await _savePreferences();
+          await _loadOrGoOffline();
+        },
+        onSpeechRateChanged: (newRate) async {
+          setState(() => _speechRate = newRate);
+          await _savePreferences();
+          await _loadOrGoOffline();
+        },
+        onCompressionChanged: (newCompression) async {
+          setState(() => _selectedCompression = newCompression);
+          await _savePreferences();
+          await _loadOrGoOffline();
+        },
+        onGenerateDigest: () async {
+          await _loadLiveNews();
+        },
+        onDownloadDigest: () async {
+          await downloadCategoryOffline(_currentChannel);
+        },
+      ),
+     
+      SourcesScreen(initialStatus: _isOnline),
+
+      SettingsScreen(
+        initialLanguage: _selectedLanguage,
+        initialSpeechRate: _speechRate,
+        initialCommandMode: _selectedCommandMode,
+        onCommandModeChanged: (newMode) async {
+          setState(() => _selectedCommandMode = newMode);
+          await _savePreferences();
+          await Future.microtask(() async {
+            try {
+            if (newMode == 'ok, styslo') {
+                logger.i("[SETTINGS] Switched to 'ok, styslo'. Ensuring mic is fresh and starting...");
+                await _listen();
+            } else {
+                logger.i("[SETTINGS] Switched to '$newMode'. Turning off Vosk completely.");
+                await _stopVosk();
+              }
+            } catch (e){
+              logger.e("[SETTINGS] Error handling command mode change: $e");
+            }
+          });
+        },
+             
+        onLanguageChanged: (newLang) async {
+          setState(() => _selectedLanguage = newLang);
+          await _savePreferences();
+        },
+        onSpeechRateChanged: (newRate) async {
+          setState(() => _speechRate = newRate);
+          await _savePreferences();
+          await _loadOrGoOffline();
+        },
+      ),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(
+        centerTitle: true,
+        backgroundColor: Colors.black,
+      ),
+      body: pages[_currentIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        backgroundColor: Colors.black,
+        selectedItemColor: Colors.blueAccent,
+        unselectedItemColor: Colors.grey,
+        type: BottomNavigationBarType.fixed,
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+          // Refresh configuration data if switching back to Home or Sources
+          if (index == 0 || index == 2) {
+            _fetchConfig();
+          }
+        },
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.auto_awesome),
+            label: 'Digest',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.list_alt),
+            label: 'Sources',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
+        ],
+      ),
+    );
+  }
+}
