@@ -1,3 +1,4 @@
+# Library for logging python code with color 
 from colorama import Fore, init
 import datetime
 import time

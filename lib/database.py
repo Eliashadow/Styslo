@@ -1,14 +1,18 @@
+# ==== Essential imports ====
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+
+# ==== Database imports ====
+from sqlalchemy import create_engine, Column, Integer, String, Text, LargeBinary, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+# DB settings
 DATABASE_URL = "sqlite:///./styslo.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-
+# Table for handling users
 class User(Base):
     __tablename__ = "users"
 
@@ -22,6 +26,7 @@ class User(Base):
     subscriptions = relationship("UserCategory", back_populates="user", cascade="all, delete-orphan")
     digests = relationship("Digest", back_populates="user", cascade="all, delete-orphan")
 
+# Table for handling categories(all)
 class Category(Base):
     __tablename__ = "categories"
 
@@ -32,6 +37,7 @@ class Category(Base):
     digests = relationship("Digest", back_populates="category", cascade="all, delete-orphan")
     subscriptions = relationship("UserCategory", back_populates="category", cascade="all, delete-orphan")
 
+# Table for handling user's categories
 class UserCategory(Base):
     __tablename__ = "user_categories"
 
@@ -42,6 +48,7 @@ class UserCategory(Base):
     user = relationship("User", back_populates="subscriptions")
     category = relationship("Category", back_populates="subscriptions")
 
+# Table for handling sources
 class Source(Base):
     __tablename__ = "sources"
     
@@ -56,7 +63,7 @@ class Source(Base):
     category = relationship("Category", back_populates="sources")
     articles = relationship("Article", back_populates="source", cascade="all, delete-orphan")
 
-
+# Table for handling articles
 class Article(Base):
     __tablename__ = "articles"
     
@@ -72,17 +79,19 @@ class Article(Base):
     source = relationship("Source", back_populates="articles")
     digest_links = relationship("DigestArticle", back_populates="article", cascade="all, delete-orphan")
 
-
+# Table for handling digests
 class Digest(Base):
     __tablename__ = "digests"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id =Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     category_id = Column(Integer,ForeignKey("categories.id"),nullable=False,index=True)
+    lang = Column(String, nullable=False)
+    title = Column(String, nullable=False)
     compression_level = Column(String(100), nullable=False)
-    summary_text = Column(Text, nullable=False)        
-    ai_model = Column(String(100),nullable=True)
-    audio_url = Column(String, nullable=True)          
+    summary_text = Column(Text, nullable=False)  
+          
+    ai_model = Column(String(100),nullable=True)     
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     title = Column(String(500), nullable=True)
     
@@ -91,7 +100,7 @@ class Digest(Base):
     article_links = relationship("DigestArticle", back_populates="digest", cascade="all, delete-orphan")
     audio_files = relationship("AudioFile", back_populates="digest", cascade="all, delete-orphan")
     
-
+# Table for handling relation between digest and article
 class DigestArticle(Base):
     __tablename__ = "digest_articles"
 
@@ -102,7 +111,7 @@ class DigestArticle(Base):
     digest = relationship("Digest", back_populates="article_links")
     article = relationship("Article", back_populates="digest_links")
 
-
+# Table for handling audiofile
 class AudioFile(Base):
     __tablename__ = "audio_files"
 
@@ -110,8 +119,9 @@ class AudioFile(Base):
     digest_id = Column(Integer, ForeignKey("digests.id", ondelete="CASCADE"), nullable=False, index=True)
     file_url = Column(String(1000), nullable=False)
     file_name = Column(String(255), nullable=True)
-    mime_type = Column(String(100), default="audio/mpeg")
     language = Column(String(20), default="uk-UA")
+    timing = Column(Text, nullable=False)
+    mime_type = Column(String(100), default="audio/mpeg")
     voice_name = Column(String(100), nullable=True)
     duration_seconds = Column(Integer, nullable=True)
     timing_json = Column(Text, nullable=True)
@@ -119,11 +129,12 @@ class AudioFile(Base):
 
     digest = relationship("Digest", back_populates="audio_files")
 
-
+# Init DB
 def init_db():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
+        # Checking if there is category if not creating test data
         if db.query(Category).count() == 0:
             print("DB is empty. Populating with test data...")
             
@@ -150,6 +161,7 @@ def init_db():
     finally:
         db.close()
 
+# Getting DB on demand 
 def get_db():
     db = SessionLocal()
     try:
@@ -157,5 +169,6 @@ def get_db():
     finally:
         db.close()
 
+# If started manually init db
 if __name__ == "__main__":
     init_db()
