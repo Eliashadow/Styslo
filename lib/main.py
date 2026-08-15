@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # ==== DB imports ====
-from database import (get_db, User, UserCategory, Category, Source, Article, Digest, DigestArticle, SessionLocal, init_db)
+from database import (get_db, User, UserCategory, Category, Source, Article, Digest, DigestArticle, AudioFile, SessionLocal, init_db)
 from pathlib import Path
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -384,13 +384,17 @@ async def get_news(request: NewsRequest, fastapi_req:Request, db: Session = Depe
         except ValidationError as e:
             l.error(f'Validation error {e.json()}')
             raise HTTPException(status_code=500, detail=e.errors())
+
+# Creating user
 @app.post("/api/users")
 def create_user(request: UserCreateRequest, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == request.email).first()
 
+    # Checking for existing user
     if existing_user:
         raise HTTPException(status_code=400, detail="User with this email already exists.")
 
+    # Commiting into DB new user
     new_user = User(
         name=request.name,
         email=request.email,
@@ -408,17 +412,22 @@ def create_user(request: UserCreateRequest, db: Session = Depends(get_db)):
         "created_at": new_user.created_at
     }
 
+# Getting user digests
 @app.get("/api/users/{user_id}/digests")
 def get_user_digests(user_id: int, db: Session = Depends(get_db)):
+    # Searching user in DB
     user = db.query(User).filter(User.id == user_id).first()
 
+    # If there is not user catching error
     if not user:
         raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
 
+    # Searching for digest in users
     digests = db.query(Digest).filter(Digest.user_id == user_id).order_by(Digest.created_at.desc()).limit(20).all()
 
     result = []
 
+    # Looping through digest
     for digest in digests:
         used_articles = []
 
@@ -429,20 +438,26 @@ def get_user_digests(user_id: int, db: Session = Depends(get_db)):
 
     return result
 
+# Updating user categories
 @app.put("/api/users/{user_id}/categories")
 def update_user_categories(user_id: int, request: UserCategoriesRequest, db: Session = Depends(get_db)):
+    # Searching user in DB
     user = db.query(User).filter(User.id == user_id).first()
 
+    # If there is not user catching error
     if not user:
         raise HTTPException(status_code=404, detail=f"User with id {user_id} not found.")
-
+    
+    # Searching categories in DB
     categories = db.query(Category).filter(Category.id.in_(request.category_ids)).all()
 
+    # Checking for already deleted categories just in case
     if len(categories) != len(request.category_ids):
         raise HTTPException(status_code=400, detail="Some category IDs do not exist.")
 
     db.query(UserCategory).filter(UserCategory.user_id == user_id).delete()
 
+    # Subscribing for categories
     for category_id in request.category_ids:
         subscription = UserCategory(user_id=user_id, category_id=category_id)
         db.add(subscription)
@@ -451,11 +466,14 @@ def update_user_categories(user_id: int, request: UserCategoriesRequest, db: Ses
 
     return {"user_id": user_id, "category_ids": request.category_ids}
 
+# Getting digests
 @app.get("/api/digests")
-def get_digests(db: Session = Depends(get_db)):
+def get_digests(db: Session = Depends(get_db)): 
+    # Searching digest in DB(max 20)
     digests = db.query(Digest).order_by(Digest.created_at.desc()).limit(20).all()
     result = []
 
+    # Looping through digests to add to results
     for digest in digests:
         used_articles = []
 
@@ -466,11 +484,15 @@ def get_digests(db: Session = Depends(get_db)):
 
     return result
 
-
+# Getting all sources  
 @app.get("/api/sources")
 def get_all_sources(db: Session = Depends(get_db)):
+    # Searching categories
     categories = db.query(Category).all()
+
     result = []
+
+    # Looping through categories to find all sources 
     for cat in categories:
         result.append({
             "category_name": cat.name,
@@ -483,6 +505,7 @@ def get_all_sources(db: Session = Depends(get_db)):
                 } for src in cat.sources
             ]
         })
+
     return result
 
 # ==== Sources Screen operations ====
